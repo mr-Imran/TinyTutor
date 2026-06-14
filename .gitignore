@@ -1,0 +1,30 @@
+# Environments
+venv/
+env/
+.env
+.venv
+__pycache__/
+*.pyc
+backend/vendor/
+
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Next.js
+.next/
+out/
+build/
+
+# Database and Uploads (IMPORTANT FOR PRIVACY)
+backend/data/tutor.db
+backend/data/uploads/*
+!backend/data/uploads/.gitkeep
+
+# IDEs and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
