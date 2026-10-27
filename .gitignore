@@ -28,3 +28,7 @@ backend/data/uploads/*
 .idea/
 .DS_Store
 *.swp
+
+# Test caches
+.pytest_cache/
+*.tsbuildinfo

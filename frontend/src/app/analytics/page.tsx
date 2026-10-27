@@ -61,6 +61,10 @@ export default function AnalyticsPage() {
     .slice(0, 14)
     .map(([date, v]) => ({ date, ...v }));
 
+  const masteryTrend =
+    data?.mastery_trend?.map((p) => ({ date: p.date.slice(5), mastery: p.overall })) ?? [];
+  const hasMasteryTrend = masteryTrend.some((p) => p.mastery !== null);
+
   return (
     <div>
       <PageHeader
@@ -131,6 +135,52 @@ export default function AnalyticsPage() {
                   />
                 </LineChart>
               </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        <motion.div
+          className="lg:col-span-2"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.12 }}
+        >
+          <Card>
+            <CardHeader>
+              <CardTitle>Mastery Over Time</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Average mastery at the end of each week. Recent and harder answers count more, and topics
+                you have not practised slowly drift back toward 50%.
+              </p>
+            </CardHeader>
+            <CardContent className="h-64">
+              {!hasMasteryTrend ? (
+                <p className="text-sm text-muted-foreground">Answer quizzes or review flashcards to build a trend.</p>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={masteryTrend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#ffffff15" />
+                    <XAxis dataKey="date" tick={{ fill: "#94a3b8", fontSize: 11 }} />
+                    <YAxis tick={{ fill: "#94a3b8" }} domain={[0, 100]} unit="%" />
+                    <Tooltip
+                      formatter={(v) => [`${v}%`, "Mastery"]}
+                      contentStyle={{
+                        background: "hsl(222 40% 10%)",
+                        border: "1px solid rgba(255,255,255,0.1)",
+                        borderRadius: 8,
+                      }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="mastery"
+                      stroke="#8b5cf6"
+                      strokeWidth={2}
+                      dot={{ fill: "#22d3ee" }}
+                      connectNulls
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </CardContent>
           </Card>
         </motion.div>

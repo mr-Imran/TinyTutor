@@ -18,6 +18,11 @@ ALLOWED_TABLES = [
     "quiz_attempts",
     "topic_scores",
     "scheduled_questions",
+    "flashcards",
+    "chat_sessions",
+    "chat_messages",
+    "mock_exams",
+    "mastery_events",
 ]
 
 MANUAL_FILENAME = "__manual_context__"

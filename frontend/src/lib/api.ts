@@ -40,12 +40,55 @@ export const api = {
   deleteDocument: (id: number) =>
     request(`/api/documents/${id}`, { method: "DELETE" }),
 
-  chat: (message: string, topic?: string) =>
+  chat: (message: string, topic?: string, session_id?: number) =>
     request<ChatResponse>("/api/chat", {
       method: "POST",
-      body: JSON.stringify({ message, topic }),
+      body: JSON.stringify({ message, topic, session_id }),
     }),
   topics: () => request<{ topics: string[] }>("/api/chat/topics"),
+  chatSessions: (kind?: ChatKind) =>
+    request<ChatSession[]>(`/api/chat/sessions${kind ? `?kind=${kind}` : ""}`),
+  chatSession: (id: number) => request<ChatSessionDetail>(`/api/chat/sessions/${id}`),
+  renameChatSession: (id: number, title: string) =>
+    request<ChatSession>(`/api/chat/sessions/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  deleteChatSession: (id: number) => request(`/api/chat/sessions/${id}`, { method: "DELETE" }),
+
+  search: (q: string, limit = 20) =>
+    request<{ query: string; results: SearchHit[] }>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+
+  document: (id: number) => request<Document>(`/api/documents/${id}`),
+  resummarize: (id: number) => request<Document>(`/api/documents/${id}/summarize`, { method: "POST" }),
+
+  llmSettings: () => request<LlmSettings>("/api/settings/llm"),
+  saveLlmSettings: (body: LlmSettingsUpdate) =>
+    request<LlmSettings>("/api/settings/llm", { method: "PUT", body: JSON.stringify(body) }),
+  llmModels: (provider: LlmProvider) =>
+    request<{ provider: LlmProvider; models: string[]; error: string | null }>(
+      `/api/settings/llm/models?provider=${provider}`
+    ),
+  llmHealth: () => request<LlmHealth>("/api/settings/llm/health"),
+
+  flashcards: (topic?: string) =>
+    request<Flashcard[]>(`/api/flashcards${topic ? `?topic=${encodeURIComponent(topic)}` : ""}`),
+  dueFlashcards: (limit = 20, topic?: string) =>
+    request<Flashcard[]>(
+      `/api/flashcards/due?limit=${limit}${topic ? `&topic=${encodeURIComponent(topic)}` : ""}`
+    ),
+  flashcardStats: () => request<FlashcardStats>("/api/flashcards/stats"),
+  generateFlashcards: (body: { topic?: string; document_id?: number; count?: number }) =>
+    request<{ created: Flashcard[] }>("/api/flashcards/generate", { method: "POST", body: JSON.stringify(body) }),
+  createFlashcard: (body: { topic: string; front: string; back: string }) =>
+    request<Flashcard[]>("/api/flashcards", { method: "POST", body: JSON.stringify(body) }),
+  reviewFlashcard: (id: number, grade: number) =>
+    request<Flashcard>(`/api/flashcards/${id}/review`, { method: "POST", body: JSON.stringify({ grade }) }),
+  deleteFlashcard: (id: number) => request(`/api/flashcards/${id}`, { method: "DELETE" }),
+
+  createMockExam: (body: CreateMockExamBody) =>
+    request<MockExam>("/api/mock-exams", { method: "POST", body: JSON.stringify(body) }),
+  mockExam: (id: number) => request<MockExam>(`/api/mock-exams/${id}`),
+  mockExams: () => request<MockExamSummary[]>("/api/mock-exams"),
+  submitMockExam: (id: number, answers: Record<number, string>) =>
+    request<MockExam>(`/api/mock-exams/${id}/submit`, { method: "POST", body: JSON.stringify({ answers }) }),
 
   generateQuiz: (body: GenerateQuizBody) =>
     request<QuizQuestion>("/api/quiz/generate", {
@@ -106,10 +149,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ minutes, topic }),
     }),
-  mentorChat: (message: string, topic?: string) =>
+  mentorChat: (message: string, topic?: string, session_id?: number) =>
     request<ChatResponse>("/api/study/mentor/chat", {
       method: "POST",
-      body: JSON.stringify({ message, topic }),
+      body: JSON.stringify({ message, topic, session_id }),
     }),
 
   semesterDashboard: () => request<SemesterDashboard>("/api/exam-tools/semester-dashboard"),
@@ -168,28 +211,64 @@ export function pdfFileUrl(docId: number) {
   return `${API}/api/exam-tools/pdf/${docId}/file`;
 }
 
-export async function mentorStream(
-  message: string,
-  topic: string | undefined,
-  onUpdate: (fullText: string) => void
-): Promise<string> {
-  const res = await fetch(`${API}/api/study/mentor/stream`, {
+export function pdfPageUrl(docId: number, page?: number | null) {
+  return `${pdfFileUrl(docId)}${page ? `#page=${page}` : ""}`;
+}
+
+function decodeSources(header: string | null): ChatSource[] {
+  if (!header) return [];
+  try {
+    const bytes = Uint8Array.from(atob(header), (c) => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return [];
+  }
+}
+
+export interface StreamResult {
+  text: string;
+  sessionId: number | null;
+  sources: ChatSource[];
+}
+
+/** Streams a tutor/mentor reply. Session id and citation sources arrive in headers. */
+export async function streamChat(
+  kind: ChatKind,
+  body: { message: string; topic?: string; session_id?: number | null },
+  onUpdate: (fullText: string, meta: Omit<StreamResult, "text">) => void,
+  signal?: AbortSignal
+): Promise<StreamResult> {
+  const path = kind === "mentor" ? "/api/study/mentor/stream" : "/api/chat/stream";
+  const res = await fetch(`${API}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, topic }),
+    body: JSON.stringify({ ...body, session_id: body.session_id ?? undefined }),
+    signal,
   });
-  if (!res.ok) throw new Error(await res.text());
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error("No stream");
+  if (!res.ok || !res.body) throw new Error(await res.text());
+  const meta = {
+    sessionId: Number(res.headers.get("X-Session-Id")) || null,
+    sources: decodeSources(res.headers.get("X-Sources")),
+  };
+  const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let full = "";
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     full += decoder.decode(value, { stream: true });
-    onUpdate(full);
+    onUpdate(full, meta);
   }
-  return full;
+  return { text: full, ...meta };
+}
+
+export async function mentorStream(
+  message: string,
+  topic: string | undefined,
+  onUpdate: (fullText: string) => void,
+  sessionId?: number | null
+): Promise<StreamResult> {
+  return streamChat("mentor", { message, topic, session_id: sessionId }, (full) => onUpdate(full));
 }
 
 export interface DashboardData {
@@ -202,6 +281,7 @@ export interface DashboardData {
   readiness_score: number;
   study_targets?: StudyTargets;
   user?: { display_name?: string };
+  flashcards?: FlashcardStats;
 }
 
 export interface TopicScore {
@@ -211,26 +291,183 @@ export interface TopicScore {
   mastery_percentage: number;
 }
 
+export interface Concept {
+  term: string;
+  definition: string;
+  related: string[];
+}
+
 export interface Document {
   id: number;
   filename: string;
   title: string;
   topic: string;
   file_type: string;
+  page_count?: number;
   chunk_count: number;
   created_at: string;
+  summary?: string | null;
+  summary_status?: "pending" | "running" | "done" | "failed" | "empty" | null;
+  concepts?: Concept[];
 }
 
 export interface UploadResult {
   document_id: number;
   title: string;
   topic: string;
+  file_type: string;
+  page_count: number;
   chunk_count: number;
+  empty: boolean;
+}
+
+export type ChatKind = "tutor" | "mentor";
+
+export interface ChatSource {
+  n: number;
+  chunk_id: number | null;
+  document_id: number | null;
+  title?: string | null;
+  source?: string | null;
+  page_number?: number | null;
+  file_type?: string | null;
+  preview?: string;
 }
 
 export interface ChatResponse {
   reply: string;
-  sources: string[];
+  sources: ChatSource[];
+  session_id: number;
+}
+
+export interface ChatSession {
+  id: number;
+  kind: ChatKind;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count?: number;
+}
+
+export interface ChatMessage {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  sources: ChatSource[];
+  created_at: string;
+}
+
+export interface ChatSessionDetail extends ChatSession {
+  messages: ChatMessage[];
+}
+
+export interface SearchHit {
+  id: number;
+  document_id: number | null;
+  title: string;
+  topic: string;
+  source: string;
+  page_number: number | null;
+  file_type: string | null;
+  snippet: string;
+}
+
+export type LlmProvider = "ollama" | "openai" | "anthropic" | "gemini";
+
+export interface LlmSettings {
+  provider: LlmProvider;
+  model: string;
+  providers: Record<LlmProvider, { model: string; default_model: string }>;
+  ollama_url: string;
+  openai_base_url: string;
+  keys: Record<"anthropic_api_key" | "gemini_api_key" | "openai_api_key", string>;
+}
+
+export interface LlmSettingsUpdate {
+  provider?: LlmProvider;
+  model?: string;
+  ollama_url?: string;
+  openai_base_url?: string;
+  openai_api_key?: string;
+  anthropic_api_key?: string;
+  gemini_api_key?: string;
+}
+
+export interface LlmHealth {
+  ok: boolean;
+  provider: LlmProvider;
+  model: string;
+  error: string | null;
+}
+
+export interface Flashcard {
+  id: number;
+  document_id: number | null;
+  topic: string;
+  front: string;
+  back: string;
+  ease: number;
+  interval_days: number;
+  repetitions: number;
+  due_at: string;
+  last_reviewed_at: string | null;
+}
+
+export interface FlashcardStats {
+  total: number;
+  due: number;
+  learned: number;
+  topics: { topic: string; total: number; due: number }[];
+}
+
+export interface CreateMockExamBody {
+  topics: string[];
+  count: number;
+  duration_minutes: number;
+  difficulty: string;
+  mix: string[];
+}
+
+export interface MockExamQuestion {
+  id: number;
+  position: number;
+  topic: string;
+  question_type: "mcq" | "true_false" | "short_answer";
+  question: string;
+  options: string[] | null;
+  correct_answer?: string;
+  explanation?: string;
+  user_answer?: string | null;
+  is_correct?: number | null;
+  feedback?: string | null;
+}
+
+export interface MockExamReport {
+  correct: number;
+  total: number;
+  percentage: number;
+  topics: { topic: string; correct: number; total: number; percentage: number }[];
+  weakest_topic: string | null;
+}
+
+export interface MockExamSummary {
+  id: number;
+  topics: string[];
+  difficulty: string;
+  duration_minutes: number;
+  status: "in_progress" | "submitted";
+  started_at: string;
+  submitted_at: string | null;
+  score: number | null;
+  total: number;
+  late: number;
+}
+
+export interface MockExam extends MockExamSummary {
+  deadline_at: string;
+  server_time: string;
+  report: MockExamReport | null;
+  questions: MockExamQuestion[];
 }
 
 export interface QuizQuestion {
@@ -268,6 +505,7 @@ export interface AnalyticsData {
   quiz_history: { topic: string; is_correct: number; created_at: string }[];
   activity: { date: string; count: number }[];
   weak_topics: TopicScore[];
+  mastery_trend?: { date: string; overall: number | null; topics: Record<string, number> }[];
 }
 
 export interface ScheduledQuestion {

@@ -114,15 +114,160 @@ CREATE TABLE IF NOT EXISTS document_annotations (
     FOREIGN KEY (user_id) REFERENCES users(id),
     FOREIGN KEY (document_id) REFERENCES documents(id)
 );
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'tutor',
+    title TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    sources_json TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+);
+
+CREATE TABLE IF NOT EXISTS flashcards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    document_id INTEGER,
+    topic TEXT NOT NULL,
+    front TEXT NOT NULL,
+    back TEXT NOT NULL,
+    ease REAL NOT NULL DEFAULT 2.5,
+    interval_days INTEGER NOT NULL DEFAULT 0,
+    repetitions INTEGER NOT NULL DEFAULT 0,
+    due_at TEXT NOT NULL,
+    last_reviewed_at TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS mastery_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    topic TEXT NOT NULL,
+    is_correct INTEGER NOT NULL,
+    weight REAL NOT NULL DEFAULT 1.0,
+    source TEXT NOT NULL DEFAULT 'quiz',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS mock_exams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    topics_json TEXT NOT NULL,
+    difficulty TEXT NOT NULL,
+    duration_minutes INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'in_progress',
+    started_at TEXT NOT NULL,
+    deadline_at TEXT NOT NULL,
+    submitted_at TEXT,
+    score INTEGER,
+    total INTEGER NOT NULL,
+    late INTEGER DEFAULT 0,
+    report_json TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS mock_exam_questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    exam_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    topic TEXT NOT NULL,
+    question_type TEXT NOT NULL,
+    question TEXT NOT NULL,
+    options_json TEXT,
+    correct_answer TEXT NOT NULL,
+    explanation TEXT,
+    user_answer TEXT,
+    is_correct INTEGER,
+    feedback TEXT,
+    FOREIGN KEY (exam_id) REFERENCES mock_exams(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_document ON knowledge_chunks(document_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_flashcards_due ON flashcards(user_id, due_at);
+CREATE INDEX IF NOT EXISTS idx_mastery_events_topic ON mastery_events(user_id, topic);
 """
+
+FTS_SCHEMA = """
+CREATE VIRTUAL TABLE chunks_fts USING fts5(
+    title, topic, content,
+    content='knowledge_chunks', content_rowid='id',
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON knowledge_chunks BEGIN
+    INSERT INTO chunks_fts(rowid, title, topic, content)
+    VALUES (new.id, new.title, new.topic, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON knowledge_chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, title, topic, content)
+    VALUES ('delete', old.id, old.title, old.topic, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON knowledge_chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, title, topic, content)
+    VALUES ('delete', old.id, old.title, old.topic, old.content);
+    INSERT INTO chunks_fts(rowid, title, topic, content)
+    VALUES (new.id, new.title, new.topic, new.content);
+END;
+"""
+
+# table -> {column: definition} added to databases created before the column existed
+COLUMN_MIGRATIONS = {
+    "scheduled_questions": {"notification_type": "TEXT DEFAULT 'quiz'"},
+    "documents": {
+        "stored_name": "TEXT",
+        "summary": "TEXT",
+        "concepts_json": "TEXT",
+        "summary_status": "TEXT",
+    },
+    "knowledge_chunks": {"page_number": "INTEGER"},
+}
 
 
 def _migrate(conn):
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(scheduled_questions)").fetchall()}
-    if "notification_type" not in cols:
+    for table, columns in COLUMN_MIGRATIONS.items():
+        existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        for column, definition in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    has_fts = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'chunks_fts'"
+    ).fetchone()
+    if not has_fts:
+        conn.executescript(FTS_SCHEMA)
+        conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")
+
+    # One-time: seed recency-weighted mastery from quiz history recorded before it existed.
+    if not conn.execute("SELECT 1 FROM app_settings WHERE key = 'mastery_backfilled'").fetchone():
         conn.execute(
-            "ALTER TABLE scheduled_questions ADD COLUMN notification_type TEXT DEFAULT 'quiz'"
+            """INSERT INTO mastery_events (user_id, topic, is_correct, weight, source, created_at)
+               SELECT user_id, COALESCE(topic, 'General'), is_correct,
+                      CASE difficulty WHEN 'easy' THEN 0.8 WHEN 'hard' THEN 1.25 ELSE 1.0 END,
+                      'quiz', created_at
+               FROM quiz_attempts WHERE is_correct IS NOT NULL"""
         )
+        conn.execute("INSERT INTO app_settings (key, value) VALUES ('mastery_backfilled', '1')")
 
 
 def init_db():

@@ -1,44 +1,42 @@
 # TinyTutor: The Ultimate Local-First AI Study Tutor & Exam Monitor
 
-**TinyTutor** is a powerful, local-first **AI study tutor** and **exam monitor** designed to help students, developers, and lifelong learners master any subject. By leveraging local Large Language Models (LLMs) via **Ollama**, TinyTutor allows you to upload course materials (PDFs, PPTX), chat securely with your documents, generate custom AI quizzes, and track your learning progress—all optimized for low-end hardware without relying on expensive cloud APIs.
+**TinyTutor** is a powerful, local-first **AI study tutor** and **exam monitor** designed to help students, developers, and lifelong learners master any subject. Upload course materials (PDF, DOCX, PPTX, TXT, Markdown), chat with your documents with page-level citations, review AI-generated flashcards with spaced repetition, take timed mock exams, and track your learning progress. Run it fully offline with **Ollama**, or plug in **Anthropic Claude**, **Google Gemini**, or any **OpenAI-compatible** API.
 
 ## 🚀 Key Features
 
-*   **📚 Local Document Chat (RAG)**: Upload PDF and PPTX files. The built-in document processor chunks your data into SQLite. Chat directly with your materials using local AI.
-*   **🧠 AI-Generated Quizzes**: Automatically generate Multiple Choice (MCQ), True/False, and Short Answer questions based on your uploaded knowledge base. Select from Easy, Medium, or Hard difficulties.
-*   **📈 Smart Dashboard & Analytics**: Track your study streaks, overall readiness, and visually analyze your strong and weak topics using interactive Recharts.
-*   **🎓 Exam Simulation**: Take comprehensive practice exams to test your knowledge retention under pressure.
-*   **⏰ Automated Study Scheduler**: Uses APScheduler to ping you with a study question on your weakest topic every 30 minutes.
-*   **🔒 100% Privacy & Local AI**: Powered by Ollama (default `qwen2.5:0.5b`). No data leaves your machine. Perfect for private, offline studying.
-*   **🗄️ Built-in Database Viewer**: Easily manage your knowledge base. Add, edit, or delete specific context chunks directly from the UI.
+*   **📚 Document Chat with Citations (RAG)**: Upload PDF, DOCX, PPTX, TXT and Markdown files. Answers cite the exact note they came from (`[1]`, `[2]`) and link straight to the PDF page.
+*   **💬 Saved Conversations**: Tutor and mentor chats are saved as sessions. Follow-up questions keep their context, and past chats are one click away.
+*   **🔎 Full-Text Search**: SQLite FTS5 with BM25 ranking powers fast, relevant search across all your materials, with highlighted snippets.
+*   **📝 Auto Summaries & Concept Maps**: Every upload gets an AI summary and a map of key terms and how they connect.
+*   **🃏 Spaced-Repetition Flashcards**: Generate flashcards from any topic or document and review them on an SM-2 schedule. Reviews feed your mastery scores.
+*   **⏱️ Timed Mock Exams**: Mixed multiple-choice, true/false and short-answer questions against a countdown. No feedback until you submit, then a per-topic report.
+*   **🧠 AI-Generated Quizzes**: Multiple choice, true/false, short-answer and open-ended questions at easy, medium or hard difficulty.
+*   **📈 Recency-Weighted Mastery**: Recent and harder answers count more. Topics you have not practised slowly drift back toward 50%, and Analytics charts your mastery week by week.
+*   **🎓 Exam Hub**: CGPA calculator, previous-question and slide analysis, midterm/final predictor, viva simulator and a PDF reader with highlights.
+*   **⏰ Automated Study Scheduler**: Every 30 minutes, a practice question on your weakest topic (or a study reminder during your exam window).
+*   **🔌 Choose Your AI**: Ollama (default, local and private), Anthropic Claude, Google Gemini, or OpenAI-compatible endpoints (OpenAI, Groq, OpenRouter, LM Studio, vLLM). Switch in Settings without restarting.
+*   **🗄️ Built-in Database Viewer**: Browse tables and add, edit or delete knowledge chunks from the UI.
 
 ## 🛠️ Technology Stack
 
-TinyTutor is built with a modern, performant, and developer-friendly stack:
-
-*   **Backend**: Python, [FastAPI](https://fastapi.tiangolo.com/), SQLite, [Ollama](https://ollama.com/), APScheduler, PyMuPDF, python-pptx.
+*   **Backend**: Python, [FastAPI](https://fastapi.tiangolo.com/), SQLite (FTS5), APScheduler, PyMuPDF, python-pptx, python-docx, the official `anthropic` SDK, httpx.
 *   **Frontend**: [Next.js 15](https://nextjs.org/), React, TypeScript, Tailwind CSS, Framer Motion, shadcn/ui components, Recharts.
-*   **AI Engine**: Local LLM inference via Ollama. No vector database required (uses efficient keyword matching).
+*   **AI Engine**: One provider interface (`backend/services/llm.py`) over Ollama, Anthropic, Gemini and OpenAI-compatible APIs. No vector database required.
 
 ## 🎯 Who is TinyTutor For?
 
-*   **Students**: Turn lecture slides and textbook PDFs into interactive tutors.
-*   **Self-Learners**: Generate quizzes to reinforce learning on any topic.
-*   **Developers**: A perfect starter template for building local AI apps with FastAPI and Next.js.
+*   **Students**: Turn lecture slides and textbook PDFs into interactive tutors, flashcards and mock exams.
+*   **Self-Learners**: Generate quizzes and flashcards to reinforce learning on any topic.
+*   **Developers**: A starter template for building multi-provider AI apps with FastAPI and Next.js.
 
 ## ⚙️ Prerequisites
 
-Before installing TinyTutor, ensure you have the following installed:
-
 1.  **Python 3.10–3.14** (3.10–3.12 recommended for the smoothest installation)
 2.  **Node.js 18+**
-3.  **Ollama** — Download at [ollama.com](https://ollama.com)
-
-**Pull the default local model:**
-```bash
-ollama pull qwen2.5:0.5b
-# Alternatively, use gemma3:270m and update backend/config.py
-```
+3.  **One AI provider**:
+    *   **Ollama** (default, fully local) — download at [ollama.com](https://ollama.com), then `ollama pull qwen2.5:0.5b`
+    *   or an API key for **Anthropic**, **Google Gemini**, or an **OpenAI-compatible** service
+4.  *(Optional)* **Tesseract OCR** for scanned PDFs — PyMuPDF uses it automatically when installed and `TESSDATA_PREFIX` is set.
 
 ## 💻 Installation & Quick Start
 
@@ -54,7 +52,6 @@ venv\Scripts\activate
 # macOS/Linux:
 # source venv/bin/activate
 
-# Install dependencies and run the server
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
@@ -68,30 +65,64 @@ npm install
 cp .env.local.example .env.local
 npm run dev
 ```
-*Access the TinyTutor dashboard at **`http://localhost:3000`***
+*Open the TinyTutor dashboard at **`http://localhost:3000`***
+
+### 3. Pick your AI model
+
+Open **Settings**. Choose a provider, paste an API key if it needs one, and pick a model from the list. The dot at the bottom of the sidebar shows whether the AI is reachable.
+
+You can also configure providers with environment variables. Values saved in Settings take precedence.
+
+| Variable | Purpose |
+|----------|---------|
+| `LLM_PROVIDER` | `ollama` (default), `anthropic`, `gemini` or `openai` |
+| `OLLAMA_URL`, `OLLAMA_MODEL` | Ollama server and default model |
+| `ANTHROPIC_API_KEY` | Anthropic key (the SDK also picks up an `ant auth login` profile) |
+| `GEMINI_API_KEY` | Google AI Studio key |
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL` | Any OpenAI-compatible endpoint |
+
+API keys saved in Settings are stored in plain text in your local SQLite database (`backend/data/tutor.db`).
+
+### 4. Run the tests
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The suite uses a fake LLM, so it needs no model or network. GitHub Actions runs it, along with the frontend lint and build, on every push and pull request.
 
 ## 🌐 API Reference Overview
 
-TinyTutor provides a clean RESTful API for integration:
-
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/documents/upload` | `POST` | Upload and process PDF/PPTX materials. |
-| `/api/documents` | `GET` | Retrieve a list of uploaded documents. |
-| `/api/chat` | `POST` | Chat with the AI tutor grounded in local data. |
-| `/api/quiz/generate` | `POST` | Generate an AI quiz question. |
-| `/api/quiz/submit` | `POST` | Submit an answer for grading and feedback. |
-| `/api/quiz/exam` | `POST` | Initiate a simulated practice exam. |
-| `/api/dashboard` | `GET` | Fetch user dashboard statistics (streak, readiness). |
-| `/api/dashboard/analytics` | `GET` | Get JSON data for Recharts analytics. |
-| `/api/db/overview` | `GET` | View database table structures and row counts. |
+| `/api/documents/upload` | `POST` | Upload PDF/DOCX/PPTX/TXT/MD. A summary and concept map are generated in the background. |
+| `/api/documents` · `/api/documents/{id}` | `GET` | List documents, or get one with its summary and concepts. |
+| `/api/documents/{id}/summarize` | `POST` | Regenerate a document's summary and concept map. |
+| `/api/search?q=` | `GET` | Full-text search with highlighted snippets. |
+| `/api/chat/stream` | `POST` | Stream a tutor reply. `X-Session-Id` and `X-Sources` (base64 JSON citations) are sent as headers. |
+| `/api/chat/sessions` | `GET` | List saved chats (`?kind=tutor\|mentor`); `GET/PATCH/DELETE /{id}` for one chat. |
+| `/api/study/mentor/stream` | `POST` | Stream a mentor reply (same session support). |
+| `/api/flashcards/generate` | `POST` | Generate flashcards from a topic or document. |
+| `/api/flashcards/due` · `/api/flashcards/{id}/review` | `GET` · `POST` | Get the review queue; submit an SM-2 grade (0–5). |
+| `/api/mock-exams` | `POST` · `GET` | Start a timed mock exam; list past exams. |
+| `/api/mock-exams/{id}/submit` | `POST` | Submit answers and get a graded report. |
+| `/api/quiz/generate` · `/api/quiz/submit` | `POST` | Generate a quiz question; grade an answer. |
+| `/api/dashboard` · `/api/dashboard/analytics` | `GET` | Streak, readiness, mastery and its weekly trend. |
+| `/api/settings/llm` | `GET` · `PUT` | Active provider/model and masked keys. |
+| `/api/settings/llm/models?provider=` | `GET` | Models available from a provider. |
+| `/api/settings/llm/health` | `GET` | Whether the active model is reachable. |
+| `/api/db/overview` | `GET` | Database table structure and row counts. |
 
 ## 📝 Important Notes
 
-*   **Single User Design**: TinyTutor defaults to user ID `1`. It is designed as a personal, single-student application.
-*   **Efficient AI Execution**: The AI models run only when requested. The 30-minute scheduler triggers standard notifications without continuously draining background resources.
-*   **File Limits**: The maximum supported upload size is 25MB per file to ensure smooth local processing.
+*   **Single User Design**: TinyTutor uses user ID `1`. It is designed as a personal, single-student application.
+*   **Privacy**: With Ollama, nothing leaves your machine. With a cloud provider, the relevant note excerpts and your questions are sent to that provider.
+*   **Efficient AI Execution**: Models run only when requested. The 30-minute scheduler adds one question at a time.
+*   **File Limits**: Maximum upload size is 25MB per file.
+*   **Upgrading**: Existing databases are migrated automatically on startup. The search index is built from your existing notes, and past quiz answers seed the new mastery scores.
 
 ---
 
-**Keywords**: AI Study Tutor, Local AI App, Ollama Next.js, FastAPI AI Project, Open Source Exam Monitor, Local RAG, AI Quiz Generator, AI Learning Platform, Offline Study Tools.
+**Keywords**: AI Study Tutor, Local AI App, Ollama Next.js, Claude API, Gemini API, FastAPI AI Project, Open Source Exam Monitor, Local RAG, AI Quiz Generator, Spaced Repetition Flashcards, Mock Exam Simulator, AI Learning Platform, Offline Study Tools.

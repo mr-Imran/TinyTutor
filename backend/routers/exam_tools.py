@@ -1,12 +1,10 @@
-import re
-from pathlib import Path
-
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from config import UPLOAD_DIR
 from database import get_db, row_to_dict
+from services.document_processor import safe_filename
 from services.exam_tools import (
     calculate_cgpa,
     cq_generator,
@@ -199,7 +197,7 @@ def save_document(body: SaveDocumentBody):
             """INSERT INTO documents
                (user_id, filename, file_type, title, topic, page_count, chunk_count, created_at)
                VALUES (?, ?, 'saved', ?, ?, 0, 1, datetime('now'))""",
-            (USER_ID, f"saved_{body.title}.txt", body.title.strip(), body.topic.strip()),
+            (USER_ID, f"saved_{safe_filename(body.title.strip())}.txt", body.title.strip(), body.topic.strip()),
         )
         document_id = cur.lastrowid
         conn.execute(
@@ -226,20 +224,19 @@ def save_document(body: SaveDocumentBody):
 def serve_pdf(doc_id: int):
     with get_db() as conn:
         row = conn.execute(
-            "SELECT filename FROM documents WHERE id = ? AND user_id = ? AND file_type = 'pdf'",
+            "SELECT filename, stored_name FROM documents WHERE id = ? AND user_id = ? AND file_type = 'pdf'",
             (doc_id, USER_ID),
         ).fetchone()
     if not row:
         raise HTTPException(404, "PDF not found")
-    safe = _safe_filename(row["filename"])
-    path = UPLOAD_DIR / f"{USER_ID}_{safe}"
+    # Uploads made before stored_name existed were saved as "<user>_<safe filename>".
+    stored = row["stored_name"] or f"{USER_ID}_{safe_filename(row['filename'])}"
+    path = UPLOAD_DIR / stored
     if not path.exists():
-        matches = list(UPLOAD_DIR.glob(f"{USER_ID}_*{Path(row['filename']).name}"))
-        if not matches:
-            raise HTTPException(404, "File missing on disk")
-        path = matches[0]
-    return FileResponse(path, media_type="application/pdf", filename=row["filename"])
-
-
-def _safe_filename(name: str) -> str:
-    return re.sub(r"[^\w.\-]", "_", name)
+        raise HTTPException(404, "File missing on disk")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=row["filename"],
+        content_disposition_type="inline",
+    )

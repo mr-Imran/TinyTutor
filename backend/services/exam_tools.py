@@ -2,7 +2,7 @@ import json
 import re
 
 from database import get_db, row_to_dict
-from services.ai import build_context, ollama_chat
+from services.ai import build_context, llm_chat
 from services.quiz import get_strong_topics, get_weak_topics
 from services.search import search_chunks
 from services.study_plan import calculate_study_targets
@@ -58,7 +58,7 @@ async def explain_selection(
         f"Highlighted text from PDF:\n{selected_text}\n\n"
         f"Student asks: {q}"
     )
-    reply = await ollama_chat(prompt, system=system)
+    reply = await llm_chat(prompt, system=system)
     return {"explanation": reply}
 
 
@@ -75,7 +75,7 @@ async def previous_question_analysis(user_id: int, topic: str | None = None) -> 
         "Tell the student: common question patterns, important topics that repeat, "
         "and how they should prepare. Keep it practical."
     )
-    analysis = await ollama_chat(prompt, system=system)
+    analysis = await llm_chat(prompt, system=system)
     return {"analysis": analysis, "sources_used": len(chunks)}
 
 
@@ -89,7 +89,7 @@ async def ppt_analysis(user_id: int, topic: str | None = None) -> dict:
         f"Teacher PPT content:\n{context}\n\n"
         "Summarize main points, likely exam focus areas, and what the student must memorize."
     )
-    analysis = await ollama_chat(prompt, system=system)
+    analysis = await llm_chat(prompt, system=system)
     return {"analysis": analysis, "slides_sources": len(chunks)}
 
 
@@ -104,7 +104,7 @@ async def cq_generator(user_id: int, topic: str, count: int = 5) -> dict:
         f"Topic: {topic}\nMaterials:\n{context}\n\n"
         f"Create {count} creative exam questions (CQ) for university level."
     )
-    raw = await ollama_chat(prompt, system=system, json_mode=True)
+    raw = await llm_chat(prompt, system=system, json_mode=True)
     try:
         data = json.loads(re.search(r"\{[\s\S]*\}", raw).group(0))
         questions = data.get("questions", [])
@@ -125,7 +125,7 @@ async def exam_predictor(user_id: int, exam_type: str, topic: str | None = None)
         f"Weak topics: {weak_list}\n\n"
         f"Predict 8 to 10 likely {label} questions, why they matter, and quick prep tips."
     )
-    prediction = await ollama_chat(prompt, system=system)
+    prediction = await llm_chat(prompt, system=system)
     return {"exam_type": label, "prediction": prediction, "topic": topic}
 
 
@@ -137,7 +137,7 @@ async def viva_simulator(user_id: int, topic: str, count: int = 5) -> dict:
         "Viva oral exam style, short answers."
     )
     prompt = f"Topic: {topic}\nNotes:\n{context}\n\nCreate {count} viva Q and model answer pairs."
-    raw = await ollama_chat(prompt, system=system, json_mode=True)
+    raw = await llm_chat(prompt, system=system, json_mode=True)
     try:
         data = json.loads(re.search(r"\{[\s\S]*\}", raw).group(0))
         pairs = data.get("pairs", [])

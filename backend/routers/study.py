@@ -1,8 +1,7 @@
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from services.ai import mentor_chat, mentor_chat_stream
+from routers.chat import ChatRequest, run_chat, stream_chat
 from services.study_plan import (
     calculate_study_targets,
     get_exam_plan,
@@ -21,11 +20,6 @@ class ExamPlanBody(BaseModel):
     exam_end: str
     expected_cgpa: float = Field(ge=0, le=10)
     current_cgpa: float = Field(ge=0, le=10)
-
-
-class MentorChatBody(BaseModel):
-    message: str
-    topic: str | None = None
 
 
 class LogSessionBody(BaseModel):
@@ -66,21 +60,10 @@ def log_session(body: LogSessionBody):
 
 
 @router.post("/mentor/chat")
-async def mentor_chat_endpoint(body: MentorChatBody):
-    if not body.message.strip():
-        raise HTTPException(400, "Message required")
-    return await mentor_chat(USER_ID, body.message.strip(), body.topic)
+async def mentor_chat_endpoint(body: ChatRequest):
+    return await run_chat("mentor", body)
 
 
 @router.post("/mentor/stream")
-async def mentor_stream(body: MentorChatBody):
-    if not body.message.strip():
-        raise HTTPException(400, "Message required")
-
-    async def event_stream():
-        buffer = ""
-        async for chunk in mentor_chat_stream(USER_ID, body.message.strip(), body.topic):
-            buffer += chunk
-            yield chunk
-
-    return StreamingResponse(event_stream(), media_type="text/plain; charset=utf-8")
+async def mentor_stream(body: ChatRequest):
+    return stream_chat("mentor", body)

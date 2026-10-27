@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { FileText, Flame, Target, Trophy, Zap } from "lucide-react";
+import { FileText, Flame, Layers, Target, Trophy, Zap } from "lucide-react";
 import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
@@ -61,6 +61,22 @@ export default function DashboardPage() {
           delay={0.15}
         />
       </div>
+
+      {d.flashcards && d.flashcards.due > 0 && (
+        <Link href="/flashcards">
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="glass-card mb-8 flex items-center justify-between gap-4 px-5 py-4 hover:bg-white/10"
+          >
+            <span className="flex items-center gap-3 text-sm">
+              <Layers className="h-5 w-5 text-violet-400" />
+              {d.flashcards.due} flashcard{d.flashcards.due === 1 ? " is" : "s are"} due for review
+            </span>
+            <span className="text-xs text-muted-foreground">Review now →</span>
+          </motion.div>
+        </Link>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>

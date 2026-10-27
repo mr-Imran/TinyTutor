@@ -13,12 +13,8 @@ _scheduler: BackgroundScheduler | None = None
 
 
 def _run_async(coro):
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+    # APScheduler jobs run in a worker thread with no event loop of its own.
+    return asyncio.run(coro)
 
 
 def _insert_notification(user_id: int, topic: str, message: str, notification_type: str, correct_answer: str = "n/a"):
