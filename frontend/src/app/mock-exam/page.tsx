@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { CheckCircle2, Clock, Timer, XCircle } from "lucide-react";
+import { Markdown } from "@/components/Markdown";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -177,7 +178,7 @@ export default function MockExamPage() {
                 <p className="text-xs text-muted-foreground">
                   Question {i + 1} · {TYPE_LABELS[q.question_type]} · {q.topic}
                 </p>
-                <p className="font-medium">{q.question}</p>
+                <Markdown text={q.question} className="font-medium" />
                 {q.options ? (
                   <div className="grid gap-2 sm:grid-cols-2">
                     {q.options.map((opt) => (
@@ -188,7 +189,7 @@ export default function MockExamPage() {
                           answers[q.id] === opt ? "border-primary bg-primary/20" : "border-white/10 bg-white/5 hover:bg-white/10"
                         }`}
                       >
-                        {opt}
+                        <Markdown text={opt} inline />
                       </button>
                     ))}
                   </div>
@@ -249,7 +250,7 @@ export default function MockExamPage() {
               <CardContent className="space-y-2 p-5 text-sm">
                 <p className="flex items-center gap-2 font-medium">
                   {q.is_correct ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : <XCircle className="h-4 w-4 text-red-400" />}
-                  {i + 1}. {q.question}
+                  {i + 1}. <Markdown text={q.question} inline />
                 </p>
                 <p className="text-muted-foreground">
                   Your answer: <span className="text-foreground">{q.user_answer || "—"}</span>
@@ -259,7 +260,9 @@ export default function MockExamPage() {
                     Correct answer: <span className="text-emerald-300">{q.correct_answer}</span>
                   </p>
                 )}
-                {(q.explanation || q.feedback) && <p className="text-xs text-muted-foreground">{q.explanation || q.feedback}</p>}
+                {(q.explanation || q.feedback) && (
+                  <Markdown text={q.explanation || q.feedback || ""} className="text-xs text-muted-foreground" />
+                )}
               </CardContent>
             </Card>
           ))}

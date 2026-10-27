@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, XCircle, RefreshCw, Sparkles, MessageSquare } from "lucide-react";
+import { Markdown } from "@/components/Markdown";
+import { looksMathematical, MathSteps } from "@/components/MathSteps";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -377,7 +379,7 @@ export default function QuizPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                <p className="text-lg">{question.question}</p>
+                <Markdown text={question.question} className="text-lg" />
 
                 {question.options ? (
                   <div className="grid gap-2 sm:grid-cols-2">
@@ -391,7 +393,7 @@ export default function QuizPage() {
                             : "border-white/10 hover:bg-white/5"
                         }`}
                       >
-                        {opt}
+                        <Markdown text={opt} inline />
                       </button>
                     ))}
                   </div>
@@ -420,9 +422,14 @@ export default function QuizPage() {
                     ) : (
                       <XCircle className="h-5 w-5 text-red-400" />
                     )}
-                    <p className="text-sm">{feedback.text}</p>
+                    <div className="space-y-1">
+                      <Markdown text={feedback.text} />
+                      {question.explanation && <Markdown text={question.explanation} className="text-muted-foreground" />}
+                    </div>
                   </motion.div>
                 )}
+
+                {feedback && looksMathematical(question.question) && <MathSteps key={question.question} problem={question.question} />}
 
                 {feedback && examMode && (
                   <Button onClick={nextExam}>Next Question</Button>

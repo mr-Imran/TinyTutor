@@ -1,6 +1,7 @@
 "use client";
 
 import { FileText } from "lucide-react";
+import { Markdown } from "@/components/Markdown";
 import { ChatSource, formatTimestamp, sourceLink } from "@/lib/api";
 
 function sourceLabel(s: ChatSource) {
@@ -29,25 +30,15 @@ function CitationChip({ source, n }: { source?: ChatSource; n: number }) {
   );
 }
 
-/** Plain text where [1]-style markers become clickable citations, plus a source list. */
+/** Markdown (with math and code) where [1]-style markers become clickable citations, plus a source list. */
 export function CitedText({ text, sources = [] }: { text: string; sources?: ChatSource[] }) {
   const byN = new Map(sources.map((s) => [s.n, s]));
-  const parts = text.split(/(\[\d+\])/g);
-  const cited = new Set<number>();
-  for (const p of parts) {
-    const m = p.match(/^\[(\d+)\]$/);
-    if (m) cited.add(Number(m[1]));
-  }
+  const cited = new Set(Array.from(text.matchAll(/\[(\d+)\]/g), (m) => Number(m[1])));
   const shown = sources.filter((s) => cited.has(s.n));
 
   return (
     <div>
-      <p className="whitespace-pre-wrap text-sm leading-relaxed">
-        {parts.map((p, i) => {
-          const m = p.match(/^\[(\d+)\]$/);
-          return m ? <CitationChip key={i} n={Number(m[1])} source={byN.get(Number(m[1]))} /> : p;
-        })}
-      </p>
+      <Markdown text={text} renderCitation={(n) => <CitationChip n={n} source={byN.get(n)} />} />
       {shown.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2 border-t border-white/10 pt-2">
           {shown.map((s) => {

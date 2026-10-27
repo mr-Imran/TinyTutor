@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Download, Layers, Mic, Sparkles, Trash2, Upload } from "lucide-react";
+import { Download, Image as ImageIcon, Layers, Mic, Sparkles, SquareDashed, Trash2, Upload } from "lucide-react";
+import { ClozeCreator, OcclusionEditor } from "@/components/CardCreators";
+import { FlashcardBack, FlashcardFront, FlashcardSummary } from "@/components/FlashcardFace";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api, downloads, Flashcard, FlashcardStats } from "@/lib/api";
+import { spokenCard } from "@/lib/cards";
 import { canSpeak, speak, stopSpeaking, useSpeechRecognition } from "@/lib/speech";
 
 // SM-2 grades behind each answer button.
@@ -41,6 +44,7 @@ export default function FlashcardsPage() {
   const [oralSupported, setOralSupported] = useState(false);
   const [spokenAnswer, setSpokenAnswer] = useState("");
   const [importTopic, setImportTopic] = useState("Imported");
+  const [maker, setMaker] = useState<"ai" | "cloze" | "image">("ai");
   const oralPhase = useRef<"answer" | "grade">("answer");
 
   const load = useCallback(() => {
@@ -113,10 +117,10 @@ export default function FlashcardsPage() {
     if (!flipped) {
       oralPhase.current = "answer";
       setSpokenAnswer("");
-      speak(current.front, voice.start);
+      speak(spokenCard(current, "front"), voice.start);
     } else {
       oralPhase.current = "grade";
-      speak(`The answer is: ${current.back}. How did you do? Say again, hard, good, or easy.`, voice.start);
+      speak(`The answer is: ${spokenCard(current, "back")}. How did you do? Say again, hard, good, or easy.`, voice.start);
     }
     return () => {
       stopSpeaking();
@@ -168,17 +172,23 @@ export default function FlashcardsPage() {
                         </span>
                       )}
                     </p>
-                    <button className="flex flex-1 flex-col items-center justify-center text-center" onClick={() => setFlipped(true)}>
-                      <p className="text-xl font-medium">{current.front}</p>
+                    <div
+                      role="button"
+                      tabIndex={-1}
+                      className="flex flex-1 cursor-pointer flex-col items-center justify-center text-center"
+                      onClick={() => setFlipped(true)}
+                    >
+                      {/* Image cards show the revealed picture in place of the question picture. */}
+                      {!(flipped && current.card_type === "occlusion") && <FlashcardFront card={current} />}
                       {flipped ? (
                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-6 border-t border-white/10 pt-6">
                           {spokenAnswer && <p className="mb-2 text-xs text-cyan-300">You said: “{spokenAnswer}”</p>}
-                          <p className="text-muted-foreground">{current.back}</p>
+                          <FlashcardBack card={current} />
                         </motion.div>
                       ) : (
                         <p className="mt-6 text-xs text-muted-foreground">Click or press space to show the answer</p>
                       )}
-                    </button>
+                    </div>
                     {flipped ? (
                       <div className="mt-6 grid grid-cols-4 gap-2">
                         {GRADES.map((g) => (
@@ -225,12 +235,29 @@ export default function FlashcardsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Sparkles className="h-4 w-4 text-violet-400" /> Make cards with AI
-            </CardTitle>
+            <CardTitle className="text-base">Make cards</CardTitle>
+            <div className="mt-2 grid grid-cols-3 gap-1 rounded-lg bg-white/5 p-1 text-xs">
+              {([
+                ["ai", "AI", Sparkles],
+                ["cloze", "Blanks", SquareDashed],
+                ["image", "Image", ImageIcon],
+              ] as const).map(([key, label, Icon]) => (
+                <button
+                  key={key}
+                  onClick={() => setMaker(key)}
+                  className={`flex items-center justify-center gap-1 rounded-md py-1.5 ${maker === key ? "bg-primary text-white" : "hover:bg-white/10"}`}
+                >
+                  <Icon className="h-3.5 w-3.5" /> {label}
+                </button>
+              ))}
+            </div>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
-            {topics.length === 0 ? (
+            {maker === "cloze" ? (
+              <ClozeCreator topics={topics} onCreated={(m) => { setMessage(m); load(); }} />
+            ) : maker === "image" ? (
+              <OcclusionEditor topics={topics} onCreated={(m) => { setMessage(m); load(); }} />
+            ) : topics.length === 0 ? (
               <p className="text-muted-foreground">Upload study material first.</p>
             ) : (
               <>
@@ -311,9 +338,8 @@ export default function FlashcardsPage() {
           {allCards.map((c) => (
             <Card key={c.id}>
               <CardContent className="flex items-start justify-between gap-4 p-4 text-sm">
-                <div>
-                  <p className="font-medium">{c.front}</p>
-                  <p className="text-muted-foreground">{c.back}</p>
+                <div className="min-w-0">
+                  <FlashcardSummary card={c} />
                   <p className="mt-1 text-xs text-muted-foreground">
                     {c.topic} · next review {new Date(c.due_at + "Z").toLocaleDateString()}
                   </p>
@@ -344,7 +370,8 @@ function KeyboardShortcuts({
   useEffect(() => {
     if (!enabled) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      const t = e.target;
+      if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement) return;
       if (!flipped && (e.key === " " || e.key === "Enter")) {
         e.preventDefault();
         onFlip();

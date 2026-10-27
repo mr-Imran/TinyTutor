@@ -253,7 +253,173 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  // ---- agent tutor & grounded answers
+  agentStatus: () => request<{ provider: LlmProvider; model: string; supported: boolean | null }>("/api/chat/agent/status"),
+  checkAnswer: (sessionId: number) =>
+    request<Grounding & { message_id: number }>(`/api/chat/sessions/${sessionId}/check`, { method: "POST" }),
+  groundingSettings: () => request<GroundingSettings>("/api/settings/grounding"),
+  saveGroundingSettings: (body: Partial<GroundingSettings>) =>
+    request<GroundingSettings>("/api/settings/grounding", { method: "PUT", body: JSON.stringify(body) }),
+
+  // ---- math
+  solveMath: (problem: string) =>
+    request<MathSolution>("/api/math/solve", { method: "POST", body: JSON.stringify({ problem }) }),
+
+  // ---- rubric grading & teach-back
+  makeRubric: (question: string, topic?: string) =>
+    request<{ criteria: RubricCriterion[] }>("/api/grading/rubric", {
+      method: "POST",
+      body: JSON.stringify({ question, topic }),
+    }),
+  gradeEssay: (body: { question: string; answer: string; rubric?: RubricCriterion[] | null; topic?: string }) =>
+    request<EssayResult>("/api/grading/essay", { method: "POST", body: JSON.stringify(body) }),
+  gradeEssayPhoto: (file: File, question: string, rubric?: RubricCriterion[] | null, topic?: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("question", question);
+    if (rubric?.length) fd.append("rubric", JSON.stringify(rubric));
+    if (topic) fd.append("topic", topic);
+    return request<EssayResult>("/api/grading/essay/photo", { method: "POST", body: fd });
+  },
+  teachBack: (body: { concept: string; explanation: string; topic?: string }) =>
+    request<TeachBackResult>("/api/grading/teach-back", { method: "POST", body: JSON.stringify(body) }),
+  gradingHistory: (kind?: "essay" | "teach_back") =>
+    request<GradedAnswer[]>(`/api/grading/history${kind ? `?kind=${kind}` : ""}`),
+
+  // ---- misconceptions
+  misconceptions: () => request<MisconceptionOverview>("/api/misconceptions"),
+  analyzeMisconceptions: () =>
+    request<MisconceptionOverview & { created: number[]; updated: number[]; message: string | null }>(
+      "/api/misconceptions/analyze",
+      { method: "POST" }
+    ),
+  newDrill: (id: number) => request<Misconception>(`/api/misconceptions/${id}/drill`, { method: "POST" }),
+  answerDrill: (id: number, index: number, answer: string) =>
+    request<DrillResult>(`/api/misconceptions/${id}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ index, answer }),
+    }),
+  setMisconceptionStatus: (id: number, status: "open" | "resolved" | "dismissed") =>
+    request<Misconception>(`/api/misconceptions/${id}/status`, { method: "PUT", body: JSON.stringify({ status }) }),
+
+  // ---- cloze & image occlusion cards
+  createCloze: (body: { topic: string; text: string; extra?: string }) =>
+    request<Flashcard[]>("/api/flashcards/cloze", { method: "POST", body: JSON.stringify(body) }),
+  suggestCloze: (text: string) =>
+    request<{ text: string; used_ai: boolean }>("/api/flashcards/cloze/suggest", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+  createOcclusion: (file: File, topic: string, masks: OcclusionMask[], header: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("topic", topic);
+    fd.append("masks", JSON.stringify(masks));
+    fd.append("header", header);
+    return request<Flashcard[]>("/api/flashcards/occlusion", { method: "POST", body: fd });
+  },
+
+  // ---- knowledge graph
+  knowledgeGraph: () => request<KnowledgeGraph>("/api/knowledge/graph"),
+  rebuildKnowledge: (forceAi = false) =>
+    request<KnowledgeGraph & { warning: string | null }>(`/api/knowledge/rebuild?force_ai=${forceAi}`, {
+      method: "POST",
+    }),
+  learningPath: (key: string) => request<LearningPath>(`/api/knowledge/path?key=${encodeURIComponent(key)}`),
+  addConceptLink: (source: string, target: string) =>
+    request<KnowledgeGraph>("/api/knowledge/links", {
+      method: "POST",
+      body: JSON.stringify({ source, target, kind: "prereq" }),
+    }),
+  removeConceptLink: (id: number) => request<KnowledgeGraph>(`/api/knowledge/links/${id}`, { method: "DELETE" }),
+  flipConceptLink: (id: number) => request<KnowledgeGraph>(`/api/knowledge/links/${id}/flip`, { method: "POST" }),
+
+  // ---- notes
+  notes: () => request<NoteSummary[]>("/api/notes"),
+  note: (id: number) => request<Note>(`/api/notes/${id}`),
+  noteByTitle: (title: string) => request<Note>(`/api/notes/by-title?title=${encodeURIComponent(title)}`),
+  createNote: (body: { title: string; topic?: string; body?: string }) =>
+    request<Note>("/api/notes", { method: "POST", body: JSON.stringify(body) }),
+  updateNote: (id: number, body: { title: string; topic?: string; body: string }) =>
+    request<Note>(`/api/notes/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  noteAssist: (action: NoteAction, text: string, note_id?: number) =>
+    request<{ action: NoteAction; text?: string; created?: number }>("/api/notes/assist", {
+      method: "POST",
+      body: JSON.stringify({ action, text, note_id }),
+    }),
+
+  // ---- lecture recordings
+  transcript: (docId: number) =>
+    request<{ id: number; content: string; start_seconds: number | null }[]>(`/api/documents/${docId}/transcript`),
+  cancelTranscription: (docId: number) =>
+    request<Document>(`/api/documents/${docId}/cancel-transcription`, { method: "POST" }),
+  retryTranscription: (docId: number) => request<Document>(`/api/documents/${docId}/transcribe`, { method: "POST" }),
+  transcriptionSettings: () => request<TranscriptionSettings>("/api/settings/transcription"),
+  saveTranscriptionSettings: (body: { model?: string; language?: string }) =>
+    request<TranscriptionSettings>("/api/settings/transcription", { method: "PUT", body: JSON.stringify(body) }),
+
+  // ---- model manager & usage
+  ollamaOverview: () => request<OllamaOverview>("/api/settings/ollama"),
+  deleteOllamaModel: (name: string) =>
+    request<{ ok: boolean }>(`/api/settings/ollama/models/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  usage: (days = 30) => request<UsageReport>(`/api/usage?days=${days}`),
+  saveUsagePrices: (prices: Record<string, { input: number; output: number }>) =>
+    request<UsageReport>("/api/usage/prices", { method: "PUT", body: JSON.stringify({ prices }) }),
+  saveBudget: (monthly_usd: number | null) =>
+    request<UsageReport>("/api/usage/budget", { method: "PUT", body: JSON.stringify({ monthly_usd }) }),
 };
+
+export function cardImageUrl(name: string) {
+  return `${API}/api/flashcards/images/${name}`;
+}
+
+export function mediaUrl(docId: number) {
+  return `${API}/api/documents/${docId}/media`;
+}
+
+/** Reads a newline-delimited JSON stream, calling onEvent per line. */
+async function readNdjson<T>(res: Response, onEvent: (event: T) => void) {
+  if (!res.ok || !res.body) throw new Error(await res.text());
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) if (line.trim()) onEvent(JSON.parse(line) as T);
+    if (done) break;
+  }
+  if (buffer.trim()) onEvent(JSON.parse(buffer) as T);
+}
+
+/** Agent-mode tutor turn. Returns the session id (from the response header). */
+export async function streamAgent(
+  body: { message: string; topic?: string; session_id?: number | null },
+  onEvent: (event: AgentEvent) => void,
+  signal?: AbortSignal
+): Promise<number | null> {
+  const res = await fetch(`${API}/api/chat/agent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...body, session_id: body.session_id ?? undefined }),
+    signal,
+  });
+  const sessionId = Number(res.headers.get("X-Session-Id")) || null;
+  await readNdjson(res, onEvent);
+  return sessionId;
+}
+
+export async function pullOllamaModel(name: string, onEvent: (event: PullEvent) => void) {
+  const res = await fetch(`${API}/api/settings/ollama/pull`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  await readNdjson(res, onEvent);
+}
 
 export function pdfFileUrl(docId: number) {
   return `${API}/api/exam-tools/pdf/${docId}/file`;
@@ -272,6 +438,10 @@ export function sourceLink(s: {
   start_seconds?: number | null;
 }): string | undefined {
   if (s.file_type === "pdf" && s.document_id) return pdfPageUrl(s.document_id, s.page_number);
+  if ((s.file_type === "audio" || s.file_type === "video") && s.document_id) {
+    return `/media?doc=${s.document_id}${s.start_seconds != null ? `&t=${s.start_seconds}` : ""}`;
+  }
+  if (s.file_type === "note" && s.document_id) return `/notes?id=${s.document_id}`;
   if (s.file_type === "youtube" && s.source_url) {
     return s.start_seconds != null ? `${s.source_url}&t=${s.start_seconds}s` : s.source_url;
   }
@@ -389,6 +559,10 @@ export interface Document {
   summary_status?: "pending" | "running" | "done" | "failed" | "empty" | null;
   concepts?: Concept[];
   source_url?: string | null;
+  media_status?: "pending" | "running" | "done" | "failed" | "cancelled" | null;
+  media_progress?: number | null;
+  media_error?: string | null;
+  duration_seconds?: number | null;
 }
 
 export interface UploadResult {
@@ -400,6 +574,7 @@ export interface UploadResult {
   chunk_count: number;
   empty: boolean;
   warnings: string[];
+  media_status?: string;
 }
 
 export type ChatKind = "tutor" | "mentor";
@@ -437,6 +612,8 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   sources: ChatSource[];
+  cards?: AgentCard[];
+  grounding?: Grounding | null;
   created_at: string;
 }
 
@@ -470,7 +647,7 @@ export interface EmbeddingSettings {
 
 export interface PlanTask {
   id: string;
-  kind: "upload" | "flashcards" | "study" | "quiz" | "mock_exam" | "read";
+  kind: "upload" | "flashcards" | "study" | "quiz" | "mock_exam" | "read" | "misconception";
   title: string;
   detail: string;
   minutes: number;
@@ -549,6 +726,11 @@ export interface Flashcard {
   repetitions: number;
   due_at: string;
   last_reviewed_at: string | null;
+  card_type: "basic" | "cloze" | "occlusion";
+  note_id: string | null;
+  cloze_index: number | null;
+  image_name: string | null;
+  masks: OcclusionMask[] | null;
 }
 
 export interface FlashcardStats {
@@ -827,4 +1009,249 @@ export interface AiHelpResult {
   question: string;
   explanation: string;
   chunks: { title?: string; topic?: string; source?: string }[];
+}
+
+// ---------------------------------------------------------------- v4 types
+
+export interface Grounding {
+  label: "fully" | "partly" | "unsupported" | "not_in_notes";
+  supported: number;
+  checked: number;
+  sentences: { text: string; supported: boolean; score: number; cited?: number[] }[];
+  method: string;
+}
+
+export interface GroundingSettings {
+  enabled: boolean;
+  ai_check: boolean;
+}
+
+export type AgentCard =
+  | { type: "flashcards"; topic: string; count: number; cards: { front: string; back: string }[] }
+  | { type: "quiz"; topic: string; questions: QuizQuestion[] }
+  | { type: "mastery"; topics: { topic: string; mastery: number; answers: number }[] }
+  | { type: "plan"; tasks: { title: string; done: boolean; minutes: number; link: string }[] };
+
+export type AgentEvent =
+  | { type: "tool"; name: string; label: string }
+  | { type: "card"; card: AgentCard }
+  | { type: "delta"; text: string }
+  | { type: "text"; text: string }
+  | { type: "notice"; message: string }
+  | { type: "error"; message: string }
+  | { type: "done"; sources: ChatSource[] };
+
+export interface MathStep {
+  explanation: string;
+  expression: string;
+  status: "verified" | "mismatch" | "unchecked";
+}
+
+export interface MathSolution {
+  problem: string;
+  steps: MathStep[];
+  final_answer: string;
+  verified: number;
+  mismatches: number;
+}
+
+export interface RubricCriterion {
+  name: string;
+  description: string;
+  points: number;
+}
+
+export interface EssayResult {
+  id: number;
+  criteria: { name: string; description: string; score: number; max: number; feedback: string; evidence: number[] }[];
+  score: number;
+  max_score: number;
+  percentage: number;
+  overall_feedback: string;
+  model_answer: string;
+  sources: ChatSource[];
+  rubric: RubricCriterion[];
+  transcription?: string;
+}
+
+export interface TeachBackResult {
+  id: number;
+  score: number;
+  accuracy: number;
+  clarity: number;
+  completeness: number;
+  gaps: string[];
+  misconceptions: string[];
+  jargon: { term: string; suggestion: string }[];
+  follow_up_question: string;
+  verdict: string;
+  notes_found: boolean;
+}
+
+export interface GradedAnswer {
+  id: number;
+  kind: "essay" | "teach_back";
+  topic: string | null;
+  question: string;
+  answer: string;
+  score: number;
+  max_score: number;
+  created_at: string;
+  result: EssayResult | TeachBackResult;
+}
+
+export interface Misconception {
+  id: number;
+  topic: string;
+  title: string;
+  description: string;
+  correction: string;
+  status: "open" | "resolved" | "dismissed";
+  streak: number;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+  drill: { questions: { question: string; options: string[] }[]; answered: number[] } | null;
+  examples: { question: string; user_answer: string; correct_answer: string }[];
+  evidence: number;
+}
+
+export interface MisconceptionOverview {
+  misconceptions: Misconception[];
+  pending: number;
+  recent_mistakes: { id: number; topic: string; question: string; user_answer: string; correct_answer: string }[];
+  min_mistakes: number;
+  resolve_streak: number;
+}
+
+export interface DrillResult {
+  is_correct: boolean;
+  correct_answer: string;
+  explanation: string;
+  streak: number;
+  status: "open" | "resolved";
+  needed: number;
+}
+
+export interface OcclusionMask {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  label?: string;
+}
+
+export interface ConceptNode {
+  key: string;
+  name: string;
+  definition: string;
+  topic: string;
+  documents: { id: number; title: string }[];
+  mastery: number | null;
+  level: "mastered" | "learning" | "weak" | "unknown";
+}
+
+export interface ConceptEdge {
+  id: number;
+  source: string;
+  target: string;
+  kind: "prereq" | "related";
+  origin: "doc" | "ai" | "user";
+}
+
+export interface KnowledgeGraph {
+  nodes: ConceptNode[];
+  edges: ConceptEdge[];
+}
+
+export interface LearningPath {
+  target: ConceptNode;
+  steps: ConceptNode[];
+  skipped: string[];
+}
+
+export interface NoteSummary {
+  id: number;
+  title: string;
+  topic: string;
+  created_at: string;
+  updated_at: string;
+  chunk_count: number;
+  preview: string;
+}
+
+export interface Note extends NoteSummary {
+  body: string;
+  links: { title: string; id: number | null }[];
+  backlinks: { id: number; title: string }[];
+  sync?: { added: number; removed: number; kept: number };
+}
+
+export type NoteAction = "continue" | "simplify" | "explain" | "summarize" | "flashcards";
+
+export interface TranscriptionSettings {
+  model: string;
+  language: string;
+  models: string[];
+  installed: boolean;
+}
+
+export interface OllamaModel {
+  name: string;
+  size_gb: number;
+  modified_at: string | null;
+  family: string | null;
+  parameters: string | null;
+  running: boolean;
+}
+
+export interface CatalogModel {
+  name: string;
+  size_gb: number;
+  purpose: "chat" | "vision" | "embedding";
+  note: string;
+  fits: boolean;
+  installed: boolean;
+  recommended: boolean;
+}
+
+export interface OllamaOverview {
+  system: {
+    ram_total_gb: number;
+    ram_available_gb: number;
+    cpu_count: number | null;
+    gpu: { name: string; memory_gb: number | null } | null;
+    model_budget_gb: number;
+  };
+  installed: OllamaModel[];
+  catalog: CatalogModel[];
+  error: string | null;
+}
+
+export interface PullEvent {
+  status: string;
+  completed?: number | null;
+  total?: number | null;
+  percent?: number | null;
+  error?: string;
+}
+
+export interface UsageBucket {
+  input_tokens: number;
+  output_tokens: number;
+  calls: number;
+  cost: number;
+  unpriced_calls: number;
+}
+
+export interface UsageReport {
+  days: number;
+  total: UsageBucket;
+  month: UsageBucket;
+  by_day: (UsageBucket & { date: string })[];
+  by_feature: (UsageBucket & { feature: string })[];
+  by_model: (UsageBucket & { provider: string; model: string; priced: boolean })[];
+  prices: Record<string, { input: number; output: number }>;
+  budget: number | null;
+  budget_status: "ok" | "warning" | "over" | null;
 }

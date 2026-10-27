@@ -32,7 +32,14 @@ function recognitionCtor(): RecognitionCtor | null {
 
 /** Text as it should be read aloud: no citation markers or stray symbols. */
 export function speakableText(text: string) {
-  return text.replace(/\[\d+\]/g, "").replace(/[*_#`]/g, "").replace(/\s+/g, " ").trim();
+  return text
+    .replace(/\[\d+\]/g, "")
+    .replace(/```[\s\S]*?```/g, " (code shown on screen) ")
+    .replace(/\\frac\{([^{}]*)\}\{([^{}]*)\}/g, "$1 over $2")
+    .replace(/\\[a-zA-Z]+/g, " ")
+    .replace(/[*_#`$\\{}]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function canSpeak() {

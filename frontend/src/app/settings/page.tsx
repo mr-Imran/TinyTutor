@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { CheckCircle2, Cpu, Database, KeyRound, RefreshCw, Server, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { DataCard, EmbeddingsCard, VisionModelField } from "@/components/SettingsExtras";
+import { GroundingCard, ModelManagerCard, TranscriptionCard, UsageLinkCard } from "@/components/SettingsV4";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -228,8 +229,24 @@ export default function SettingsPage() {
           </Card>
         </motion.div>
 
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.02 }}>
+          <ModelManagerCard />
+        </motion.div>
+
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.03 }}>
           <EmbeddingsCard />
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.035 }}>
+          <GroundingCard />
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.035 }}>
+          <TranscriptionCard />
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.035 }}>
+          <UsageLinkCard />
         </motion.div>
 
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.04 }}>
