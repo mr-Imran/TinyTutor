@@ -31,3 +31,4 @@ backend/data/uploads/*
 
 # Test caches
 .pytest_cache/
+*.tsbuildinfo
