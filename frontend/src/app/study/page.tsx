@@ -44,6 +44,8 @@ export default function StudyPage() {
   ]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  // Keeps follow-up questions in the same saved mentor conversation.
+  const [mentorSessionId, setMentorSessionId] = useState<number | null>(null);
   const [logFxOpen, setLogFxOpen] = useState(false);
   const [logFxProgress, setLogFxProgress] = useState(0);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -122,13 +124,19 @@ export default function StudyPage() {
     setMessages((m) => [...m, { role: "mentor", text: "" }]);
 
     try {
-      await mentorStream(userMsg, selectedTopic || undefined, (full) => {
-        setMessages((m) => {
-          const copy = [...m];
-          copy[copy.length - 1] = { role: "mentor", text: full };
-          return copy;
-        });
-      });
+      const result = await mentorStream(
+        userMsg,
+        selectedTopic || undefined,
+        (full) => {
+          setMessages((m) => {
+            const copy = [...m];
+            copy[copy.length - 1] = { role: "mentor", text: full };
+            return copy;
+          });
+        },
+        mentorSessionId
+      );
+      if (result.sessionId) setMentorSessionId(result.sessionId);
     } catch {
       setMessages((m) => {
         const copy = [...m];

@@ -42,3 +42,17 @@ def test_sessions_are_separated_by_kind_and_deletable(client):
 def test_unknown_session_and_empty_message(client):
     assert client.post("/api/chat/stream", json={"message": "hi", "session_id": 999}).status_code == 404
     assert client.post("/api/chat/stream", json={"message": "  "}).status_code == 400
+
+
+def test_failed_turn_is_not_saved_to_history(client, monkeypatch):
+    from services import llm
+
+    async def offline(messages, system="", cfg=None):
+        raise llm.LLMError("connection refused")
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(llm, "stream", offline)
+    r = client.post("/api/chat/stream", json={"message": "hello?"})
+    assert "offline" in r.text
+    detail = client.get(f"/api/chat/sessions/{r.headers['X-Session-Id']}").json()
+    assert detail["messages"] == []

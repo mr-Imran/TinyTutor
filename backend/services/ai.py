@@ -38,19 +38,29 @@ def _system_for(system: str, json_mode: bool) -> str:
 
 
 async def llm_chat(
-    prompt: str, system: str = "", json_mode: bool = False, history: list[dict] | None = None
+    prompt: str,
+    system: str = "",
+    json_mode: bool = False,
+    history: list[dict] | None = None,
+    errors: list[str] | None = None,
 ) -> str:
+    """Never raises: on failure returns a friendly message (and appends to `errors` if given)."""
     cfg = llm.get_llm_config()
     messages = (history or []) + [{"role": "user", "content": prompt}]
     try:
         text = await llm.complete(messages, system=_system_for(system, json_mode), json_mode=json_mode, cfg=cfg)
     except llm.LLMError as e:
+        if errors is not None:
+            errors.append(str(e))
         return f"Sorry, I cannot reach the AI right now. {llm.offline_hint(cfg)} ({e})"
     return text if json_mode else humanize_text(text)
 
 
 async def llm_chat_stream(
-    prompt: str, system: str = "", history: list[dict] | None = None
+    prompt: str,
+    system: str = "",
+    history: list[dict] | None = None,
+    errors: list[str] | None = None,
 ) -> AsyncIterator[str]:
     cfg = llm.get_llm_config()
     messages = (history or []) + [{"role": "user", "content": prompt}]
@@ -58,6 +68,8 @@ async def llm_chat_stream(
         async for chunk in llm.stream(messages, system=_system_for(system, False), cfg=cfg):
             yield chunk
     except llm.LLMError as e:
+        if errors is not None:
+            errors.append(str(e))
         yield f"Sorry, the AI is offline. {llm.offline_hint(cfg)} ({e})"
 
 
@@ -105,8 +117,9 @@ async def chat_reply(
     user_id: int, kind: str, message: str, topic: str | None = None, history: list[dict] | None = None
 ) -> dict:
     prompt, system, history, sources = prepare_chat(user_id, kind, message, topic, history)
-    reply = await llm_chat(prompt, system=system, history=history)
-    return {"reply": reply, "sources": sources}
+    errors: list[str] = []
+    reply = await llm_chat(prompt, system=system, history=history, errors=errors)
+    return {"reply": reply, "sources": sources, "failed": bool(errors)}
 
 
 async def generate_quiz_question(

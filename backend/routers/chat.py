@@ -41,9 +41,11 @@ def _open_session(kind: str, req: ChatRequest) -> tuple[int, list[dict]]:
 async def run_chat(kind: str, req: ChatRequest) -> dict:
     session_id, history = _open_session(kind, req)
     message = req.message.strip()
-    chat_history.add_message(session_id, "user", message)
     result = await chat_reply(USER_ID, kind, message, req.topic, history)
-    chat_history.add_message(session_id, "assistant", result["reply"], result["sources"])
+    # A failed turn is not saved, so error text never becomes context for later turns.
+    if not result.pop("failed"):
+        chat_history.add_message(session_id, "user", message)
+        chat_history.add_message(session_id, "assistant", result["reply"], result["sources"])
     return {**result, "session_id": session_id}
 
 
@@ -52,14 +54,16 @@ def stream_chat(kind: str, req: ChatRequest) -> StreamingResponse:
     session_id, history = _open_session(kind, req)
     message = req.message.strip()
     prompt, system, history, sources = prepare_chat(USER_ID, kind, message, req.topic, history)
-    chat_history.add_message(session_id, "user", message)
 
     async def event_stream():
-        full = ""
-        async for chunk in llm_chat_stream(prompt, system=system, history=history):
+        full, errors = "", []
+        async for chunk in llm_chat_stream(prompt, system=system, history=history, errors=errors):
             full += chunk
             yield chunk
-        chat_history.add_message(session_id, "assistant", humanize_text(full), sources)
+        # A failed turn is not saved, so error text never becomes context for later turns.
+        if not errors:
+            chat_history.add_message(session_id, "user", message)
+            chat_history.add_message(session_id, "assistant", humanize_text(full), sources)
 
     encoded = base64.b64encode(json.dumps(sources).encode()).decode()
     return StreamingResponse(

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
@@ -10,24 +11,50 @@ import {
   Brain,
   Database,
   GraduationCap,
+  Layers,
   LayoutGrid,
   LayoutDashboard,
+  Search,
   Settings,
+  Timer,
   Upload,
 } from "lucide-react";
+import { api, LlmHealth } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/upload", label: "Upload", icon: Upload },
+  { href: "/search", label: "Search", icon: Search },
   { href: "/study", label: "What to Study", icon: BookMarked },
   { href: "/tutor", label: "AI Tutor", icon: Brain },
+  { href: "/flashcards", label: "Flashcards", icon: Layers },
   { href: "/exam-hub", label: "Exam Hub", icon: LayoutGrid },
   { href: "/quiz", label: "Quiz Center", icon: GraduationCap },
+  { href: "/mock-exam", label: "Mock Exam", icon: Timer },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/database", label: "Local DB", icon: Database },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
+
+function AiStatus() {
+  const [health, setHealth] = useState<LlmHealth | null>(null);
+  const pathname = usePathname();
+
+  useEffect(() => {
+    api.llmHealth().then(setHealth).catch(() => setHealth(null));
+  }, [pathname]);
+
+  if (!health) return <p className="mt-auto px-2 text-xs text-muted-foreground">AI status unknown</p>;
+  return (
+    <Link href="/settings" className="mt-auto flex items-center gap-2 px-2 text-xs text-muted-foreground" title={health.error ?? ""}>
+      <span className={cn("h-2 w-2 shrink-0 rounded-full", health.ok ? "bg-emerald-400" : "bg-red-400")} />
+      <span className="truncate">
+        {health.provider} · {health.model || "no model"}
+      </span>
+    </Link>
+  );
+}
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -48,7 +75,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      <nav className="flex flex-1 flex-col gap-1">
+      <nav className="mb-4 flex flex-1 flex-col gap-1">
         {links.map(({ href, label, icon: Icon }) => {
           const active = pathname === href;
           return (
@@ -70,7 +97,7 @@ export function Sidebar() {
         })}
       </nav>
 
-      <p className="mt-auto px-2 text-xs text-muted-foreground">Powered by Ollama · Local AI</p>
+      <AiStatus />
     </motion.aside>
   );
 }
