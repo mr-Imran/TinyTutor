@@ -1,37 +1,8 @@
 import json
-from datetime import datetime, date
+from datetime import date, datetime, timedelta
 
 from database import get_db
-
-
-def update_topic_score(user_id: int, topic: str, is_correct: bool):
-    now = datetime.utcnow().isoformat()
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM topic_scores WHERE user_id = ? AND topic = ?",
-            (user_id, topic),
-        ).fetchone()
-
-        if row:
-            correct = row["correct_answers"] + (1 if is_correct else 0)
-            wrong = row["wrong_answers"] + (0 if is_correct else 1)
-        else:
-            correct = 1 if is_correct else 0
-            wrong = 0 if is_correct else 1
-
-        total = correct + wrong
-        mastery = round((correct / total) * 100, 1) if total else 0
-
-        conn.execute(
-            """INSERT INTO topic_scores (user_id, topic, correct_answers, wrong_answers, mastery_percentage, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(user_id, topic) DO UPDATE SET
-                 correct_answers = excluded.correct_answers,
-                 wrong_answers = excluded.wrong_answers,
-                 mastery_percentage = excluded.mastery_percentage,
-                 updated_at = excluded.updated_at""",
-            (user_id, topic, correct, wrong, mastery, now),
-        )
+from services.mastery import record_event
 
 
 def record_quiz_attempt(
@@ -44,6 +15,7 @@ def record_quiz_attempt(
     correct_answer: str,
     user_answer: str,
     is_correct: bool,
+    source: str = "quiz",
 ):
     now = datetime.utcnow().isoformat()
     with get_db() as conn:
@@ -66,11 +38,11 @@ def record_quiz_attempt(
                 now,
             ),
         )
-    update_topic_score(user_id, topic, is_correct)
-    _touch_study_streak(user_id)
+    record_event(user_id, topic, is_correct, difficulty, source=source)
+    touch_study_streak(user_id)
 
 
-def _touch_study_streak(user_id: int):
+def touch_study_streak(user_id: int):
     today = date.today().isoformat()
     with get_db() as conn:
         user = conn.execute("SELECT study_streak, last_study_date FROM users WHERE id = ?", (user_id,)).fetchone()
@@ -80,8 +52,6 @@ def _touch_study_streak(user_id: int):
         last = user["last_study_date"]
         if last == today:
             return
-        from datetime import timedelta
-
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         if last == yesterday:
             streak += 1

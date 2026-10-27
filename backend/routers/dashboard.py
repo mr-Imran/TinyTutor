@@ -3,6 +3,8 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter
 
 from database import get_db, row_to_dict
+from services.flashcards import flashcard_stats
+from services.mastery import mastery_trend, refresh_mastery
 from services.quiz import get_strong_topics, get_weak_topics
 from services.study_plan import calculate_study_targets
 
@@ -13,6 +15,7 @@ USER_ID = 1
 
 @router.get("")
 def dashboard():
+    refresh_mastery(USER_ID)
     with get_db() as conn:
         user = row_to_dict(conn.execute("SELECT * FROM users WHERE id = ?", (USER_ID,)).fetchone())
         doc_count = conn.execute(
@@ -48,11 +51,13 @@ def dashboard():
         "strong_topics": strong,
         "readiness_score": readiness,
         "study_targets": calculate_study_targets(USER_ID),
+        "flashcards": flashcard_stats(USER_ID),
     }
 
 
 @router.get("/analytics")
 def analytics():
+    refresh_mastery(USER_ID)
     with get_db() as conn:
         topic_scores = [
             row_to_dict(r)
@@ -85,6 +90,7 @@ def analytics():
         "quiz_history": quiz_history,
         "activity": [{"date": k, "count": activity[k]} for k in sorted(activity.keys())],
         "weak_topics": get_weak_topics(USER_ID, 10),
+        "mastery_trend": mastery_trend(USER_ID),
     }
 
 

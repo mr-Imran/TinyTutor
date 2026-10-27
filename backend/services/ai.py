@@ -2,69 +2,63 @@ import json
 import re
 from typing import AsyncIterator
 
-import httpx
-
-from config import OLLAMA_MODEL, OLLAMA_URL
+from services import llm
 from services.search import CONTEXT_MATCH_THRESHOLD, search_chunks, search_chunks_scored
 from services.text_style import HUMAN_STYLE_RULE, humanize_text
-from services.token_log import log_ollama_usage
+
+CITE_RULE = (
+    "The notes are numbered. When you use a note, cite it right after the sentence "
+    "with its number in square brackets, like [1] or [2][3]. Never invent numbers."
+)
+
+# kind -> (persona, label for the student's message, number of chunks to retrieve)
+CHAT_PERSONAS = {
+    "tutor": (
+        "You are a friendly study tutor. Explain simply using the provided notes. "
+        "If notes are missing, say so briefly. Keep answers concise.",
+        "Student question",
+        5,
+    ),
+    "mentor": (
+        "You are a personal AI mentor helping a student prepare for exams. "
+        "Use their study materials when available. Be warm, clear, and practical.",
+        "Student says",
+        6,
+    ),
+}
+
+# How many earlier messages from a chat session are sent along as context.
+HISTORY_MESSAGES = 6
 
 
-async def ollama_chat(prompt: str, system: str = "", json_mode: bool = False) -> str:
-    messages = []
-    sys = system
-    if not json_mode and system:
-        sys = f"{system}\n\n{HUMAN_STYLE_RULE}"
-    elif not json_mode:
-        sys = HUMAN_STYLE_RULE
-
-    if sys:
-        messages.append({"role": "system", "content": sys})
-    messages.append({"role": "user", "content": prompt})
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        try:
-            resp = await client.post(
-                f"{OLLAMA_URL}/api/chat",
-                json={"model": OLLAMA_MODEL, "messages": messages, "stream": False},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            log_ollama_usage("chat", OLLAMA_MODEL, data, stream=False)
-            text = data["message"]["content"]
-            return text if json_mode else humanize_text(text)
-        except httpx.HTTPError as e:
-            return f"Sorry, I cannot reach the AI right now. Please start Ollama and run: ollama pull {OLLAMA_MODEL}. ({e})"
+def _system_for(system: str, json_mode: bool) -> str:
+    if json_mode:
+        return system
+    return f"{system}\n\n{HUMAN_STYLE_RULE}" if system else HUMAN_STYLE_RULE
 
 
-async def ollama_chat_stream(prompt: str, system: str = "") -> AsyncIterator[str]:
-    messages = []
-    sys = f"{system}\n\n{HUMAN_STYLE_RULE}" if system else HUMAN_STYLE_RULE
-    messages.append({"role": "system", "content": sys})
-    messages.append({"role": "user", "content": prompt})
+async def llm_chat(
+    prompt: str, system: str = "", json_mode: bool = False, history: list[dict] | None = None
+) -> str:
+    cfg = llm.get_llm_config()
+    messages = (history or []) + [{"role": "user", "content": prompt}]
+    try:
+        text = await llm.complete(messages, system=_system_for(system, json_mode), json_mode=json_mode, cfg=cfg)
+    except llm.LLMError as e:
+        return f"Sorry, I cannot reach the AI right now. {llm.offline_hint(cfg)} ({e})"
+    return text if json_mode else humanize_text(text)
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        try:
-            async with client.stream(
-                "POST",
-                f"{OLLAMA_URL}/api/chat",
-                json={"model": OLLAMA_MODEL, "messages": messages, "stream": True},
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        if data.get("done"):
-                            log_ollama_usage("chat/stream", OLLAMA_MODEL, data, stream=True)
-                        chunk = data.get("message", {}).get("content", "")
-                        if chunk:
-                            yield chunk
-                    except json.JSONDecodeError:
-                        continue
-        except httpx.HTTPError:
-            yield "Sorry, the AI mentor is offline. Please start Ollama on your computer."
+
+async def llm_chat_stream(
+    prompt: str, system: str = "", history: list[dict] | None = None
+) -> AsyncIterator[str]:
+    cfg = llm.get_llm_config()
+    messages = (history or []) + [{"role": "user", "content": prompt}]
+    try:
+        async for chunk in llm.stream(messages, system=_system_for(system, False), cfg=cfg):
+            yield chunk
+    except llm.LLMError as e:
+        yield f"Sorry, the AI is offline. {llm.offline_hint(cfg)} ({e})"
 
 
 def build_context(chunks: list[dict]) -> str:
@@ -72,57 +66,47 @@ def build_context(chunks: list[dict]) -> str:
         return "No study materials uploaded yet."
     parts = []
     for i, ch in enumerate(chunks, 1):
-        parts.append(f"[{i}] Topic: {ch.get('topic', 'General')}\n{ch['content'][:800]}")
+        where = ch.get("source") or "notes"
+        if ch.get("page_number"):
+            where += f", page {ch['page_number']}"
+        parts.append(f"[{i}] Topic: {ch.get('topic', 'General')} ({where})\n{ch['content'][:800]}")
     return "\n\n".join(parts)
 
 
-async def tutor_chat(user_id: int, message: str, topic: str | None = None) -> dict:
-    chunks = search_chunks(user_id, message, topic=topic, limit=5)
-    context = build_context(chunks)
-
-    system = (
-        "You are a friendly study tutor. Explain simply using the provided notes. "
-        "If notes are missing, say so briefly. Keep answers concise."
-    )
-    prompt = f"Study notes:\n{context}\n\nStudent question: {message}"
-    reply = await ollama_chat(prompt, system=system)
-    return {"reply": reply, "sources": [c.get("source", "") for c in chunks]}
-
-
-async def tutor_chat_stream(user_id: int, message: str, topic: str | None = None) -> AsyncIterator[str]:
-    chunks = search_chunks(user_id, message, topic=topic, limit=5)
-    context = build_context(chunks)
-    system = (
-        "You are a friendly study tutor. Explain simply using the provided notes. "
-        "If notes are missing, say so briefly. Keep answers concise."
-    )
-    prompt = f"Study notes:\n{context}\n\nStudent question: {message}"
-    async for chunk in ollama_chat_stream(prompt, system=system):
-        yield chunk
+def source_refs(chunks: list[dict]) -> list[dict]:
+    """Citation targets matching the [n] numbers used in build_context."""
+    return [
+        {
+            "n": i,
+            "chunk_id": ch.get("id"),
+            "document_id": ch.get("document_id"),
+            "title": ch.get("title"),
+            "source": ch.get("source"),
+            "page_number": ch.get("page_number"),
+            "file_type": ch.get("file_type"),
+            "preview": (ch.get("content") or "")[:240],
+        }
+        for i, ch in enumerate(chunks, 1)
+    ]
 
 
-async def mentor_chat(user_id: int, message: str, topic: str | None = None) -> dict:
-    chunks = search_chunks(user_id, message, topic=topic, limit=6)
-    context = build_context(chunks)
-    system = (
-        "You are a personal AI mentor helping a student prepare for exams. "
-        "Use their study materials when available. Be warm, clear, and practical."
-    )
-    prompt = f"Their study materials:\n{context}\n\nStudent says: {message}"
-    reply = await ollama_chat(prompt, system=system)
-    return {"reply": reply, "sources": [c.get("source", "") for c in chunks]}
+def prepare_chat(
+    user_id: int, kind: str, message: str, topic: str | None = None, history: list[dict] | None = None
+) -> tuple[str, str, list[dict], list[dict]]:
+    """Returns (prompt, system, history, sources) for a tutor or mentor turn."""
+    persona, label, limit = CHAT_PERSONAS[kind]
+    chunks = search_chunks(user_id, message, topic=topic, limit=limit)
+    prompt = f"Study notes:\n{build_context(chunks)}\n\n{label}: {message}"
+    system = f"{persona} {CITE_RULE}" if chunks else persona
+    return prompt, system, (history or [])[-HISTORY_MESSAGES:], source_refs(chunks)
 
 
-async def mentor_chat_stream(user_id: int, message: str, topic: str | None = None) -> AsyncIterator[str]:
-    chunks = search_chunks(user_id, message, topic=topic, limit=6)
-    context = build_context(chunks)
-    system = (
-        "You are a personal AI mentor helping a student prepare for exams. "
-        "Use their study materials when available. Be warm, clear, and practical."
-    )
-    prompt = f"Their study materials:\n{context}\n\nStudent says: {message}"
-    async for chunk in ollama_chat_stream(prompt, system=system):
-        yield chunk
+async def chat_reply(
+    user_id: int, kind: str, message: str, topic: str | None = None, history: list[dict] | None = None
+) -> dict:
+    prompt, system, history, sources = prepare_chat(user_id, kind, message, topic, history)
+    reply = await llm_chat(prompt, system=system, history=history)
+    return {"reply": reply, "sources": sources}
 
 
 async def generate_quiz_question(
@@ -150,7 +134,7 @@ async def generate_quiz_question(
         f"Based on:\n{context}\n"
         "JSON only."
     )
-    raw = await ollama_chat(prompt, system=system, json_mode=True)
+    raw = await llm_chat(prompt, system=system, json_mode=True)
     return _parse_quiz_json(raw, topic, question_type, difficulty)
 
 
@@ -169,7 +153,7 @@ async def evaluate_answer(
         f"Question: {question}\nExpected: {correct_answer}\nStudent: {user_answer}\n"
         "Grade generously if meaning matches."
     )
-    raw = await ollama_chat(prompt, system=system, json_mode=True)
+    raw = await llm_chat(prompt, system=system, json_mode=True)
     try:
         data = json.loads(_extract_json(raw))
         return {
@@ -210,7 +194,7 @@ async def generate_broad_question(
         f"Study material:\n{context}\n\n"
         "Write one broad question a student can answer in their own words."
     )
-    raw = await ollama_chat(prompt, system=system, json_mode=True)
+    raw = await llm_chat(prompt, system=system, json_mode=True)
     try:
         data = json.loads(_extract_json(raw))
         question = str(data.get("question", "")).strip()
@@ -255,7 +239,7 @@ async def check_broad_answer(
         f"Student answer: {user_answer}\n"
         "Judge if the answer is reasonable based on the notes. Grade generously if the idea is right."
     )
-    raw = await ollama_chat(prompt, system=system, json_mode=True)
+    raw = await llm_chat(prompt, system=system, json_mode=True)
     try:
         data = json.loads(_extract_json(raw))
         return {
@@ -308,7 +292,7 @@ async def generate_ai_help(
             "Explain from general knowledge in the simplest way possible."
         )
 
-    explanation = await ollama_chat(prompt, system=system)
+    explanation = await llm_chat(prompt, system=system)
     return {
         "matched": matched,
         "question": question,

@@ -5,7 +5,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import CORS_ORIGINS
 from database import init_db
-from routers import chat, dashboard, database_viewer, documents, exam_tools, quiz, study
+from routers import (
+    chat,
+    dashboard,
+    database_viewer,
+    documents,
+    exam_tools,
+    flashcards,
+    mock_exams,
+    quiz,
+    search,
+    settings,
+    study,
+)
 from services.scheduler import start_scheduler
 
 
@@ -25,6 +37,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Session-Id", "X-Sources"],
 )
 
 app.include_router(documents.router)
@@ -34,6 +47,10 @@ app.include_router(dashboard.router)
 app.include_router(database_viewer.router)
 app.include_router(study.router)
 app.include_router(exam_tools.router)
+app.include_router(settings.router)
+app.include_router(search.router)
+app.include_router(flashcards.router)
+app.include_router(mock_exams.router)
 
 
 @app.get("/api/health")
