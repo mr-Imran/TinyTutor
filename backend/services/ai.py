@@ -3,7 +3,7 @@ import re
 from typing import AsyncIterator
 
 from services import llm
-from services.search import CONTEXT_MATCH_THRESHOLD, search_chunks, search_chunks_scored
+from services.search import CONTEXT_MATCH_THRESHOLD, hybrid_search, search_chunks, search_chunks_scored
 from services.text_style import HUMAN_STYLE_RULE, humanize_text
 
 CITE_RULE = (
@@ -81,6 +81,8 @@ def build_context(chunks: list[dict]) -> str:
         where = ch.get("source") or "notes"
         if ch.get("page_number"):
             where += f", page {ch['page_number']}"
+        elif ch.get("start_seconds") is not None:
+            where += f", at {ch['start_seconds'] // 60}:{ch['start_seconds'] % 60:02d}"
         parts.append(f"[{i}] Topic: {ch.get('topic', 'General')} ({where})\n{ch['content'][:800]}")
     return "\n\n".join(parts)
 
@@ -96,18 +98,20 @@ def source_refs(chunks: list[dict]) -> list[dict]:
             "source": ch.get("source"),
             "page_number": ch.get("page_number"),
             "file_type": ch.get("file_type"),
+            "source_url": ch.get("source_url"),
+            "start_seconds": ch.get("start_seconds"),
             "preview": (ch.get("content") or "")[:240],
         }
         for i, ch in enumerate(chunks, 1)
     ]
 
 
-def prepare_chat(
+async def prepare_chat(
     user_id: int, kind: str, message: str, topic: str | None = None, history: list[dict] | None = None
 ) -> tuple[str, str, list[dict], list[dict]]:
     """Returns (prompt, system, history, sources) for a tutor or mentor turn."""
     persona, label, limit = CHAT_PERSONAS[kind]
-    chunks = search_chunks(user_id, message, topic=topic, limit=limit)
+    chunks = await hybrid_search(user_id, message, topic=topic, limit=limit)
     prompt = f"Study notes:\n{build_context(chunks)}\n\n{label}: {message}"
     system = f"{persona} {CITE_RULE}" if chunks else persona
     return prompt, system, (history or [])[-HISTORY_MESSAGES:], source_refs(chunks)
@@ -116,7 +120,7 @@ def prepare_chat(
 async def chat_reply(
     user_id: int, kind: str, message: str, topic: str | None = None, history: list[dict] | None = None
 ) -> dict:
-    prompt, system, history, sources = prepare_chat(user_id, kind, message, topic, history)
+    prompt, system, history, sources = await prepare_chat(user_id, kind, message, topic, history)
     errors: list[str] = []
     reply = await llm_chat(prompt, system=system, history=history, errors=errors)
     return {"reply": reply, "sources": sources, "failed": bool(errors)}

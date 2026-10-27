@@ -19,6 +19,12 @@ class FakeLLM:
         self.grade_correct = True
 
     def reply_for(self, system: str, messages: list[dict]) -> str:
+        if "highlighted passages" in system:
+            count = messages[-1]["content"].count("\n\n[") + 1
+            return json.dumps({"cards": [
+                {"n": i, "front": f"Highlight question {i}?", "back": f"Highlight answer {i}."}
+                for i in range(1, count + 1)
+            ]})
         if "flashcards" in system:
             return json.dumps({"cards": [
                 {"front": "What is ATP?", "back": "The cell's energy currency."},
@@ -62,7 +68,49 @@ def fake_llm(monkeypatch):
     fake = FakeLLM()
     monkeypatch.setattr(llm, "complete", fake.complete)
     monkeypatch.setattr(llm, "stream", fake.stream)
+
+    async def describe_image(image, mime, prompt=llm.VISION_PROMPT, cfg=None):
+        fake.calls.append({"vision": mime})
+        return "Handwritten note: the mitochondria is the powerhouse of the cell."
+
+    monkeypatch.setattr(llm, "describe_image", describe_image)
     return fake
+
+
+# Words in the same group get the same embedding direction, so "car" matches "automobile"
+# by meaning even though the words differ.
+SYNONYMS = [
+    {"car", "cars", "automobile", "vehicle", "engine"},
+    {"plant", "plants", "photosynthesis", "chlorophyll", "leaf"},
+    {"heart", "cardiac", "blood", "pulse"},
+]
+
+
+def fake_vector(text: str, dim: int = 16) -> list[float]:
+    import re
+
+    vec = [0.0] * dim
+    for word in re.findall(r"\w+", text.lower()):
+        group = next((i for i, g in enumerate(SYNONYMS) if word in g), None)
+        if group is not None:
+            vec[group] += 1.0
+        else:
+            vec[3 + hash(word) % (dim - 3)] += 0.2
+    return vec
+
+
+@pytest.fixture(autouse=True)
+def fake_embeddings(monkeypatch):
+    from services import embeddings
+
+    calls = []
+
+    async def embed(texts, cfg=None):
+        calls.append(len(texts))
+        return [fake_vector(t) for t in texts]
+
+    monkeypatch.setattr(embeddings, "embed_texts", embed)
+    return calls
 
 
 @pytest.fixture
@@ -73,9 +121,10 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", data_dir / "tutor.db")
     import routers.documents
     import routers.exam_tools
+    import services.data_transfer
     import services.document_processor
 
-    for mod in (services.document_processor, routers.documents, routers.exam_tools):
+    for mod in (services.document_processor, services.data_transfer, routers.documents, routers.exam_tools):
         monkeypatch.setattr(mod, "UPLOAD_DIR", uploads)
     for var in ("LLM_PROVIDER", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_BASE_URL"):
         monkeypatch.delenv(var, raising=False)

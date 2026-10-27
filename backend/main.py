@@ -8,11 +8,14 @@ from database import init_db
 from routers import (
     chat,
     dashboard,
+    data,
     database_viewer,
     documents,
     exam_tools,
     flashcards,
     mock_exams,
+    plan,
+    progress,
     quiz,
     search,
     settings,
@@ -51,6 +54,9 @@ app.include_router(settings.router)
 app.include_router(search.router)
 app.include_router(flashcards.router)
 app.include_router(mock_exams.router)
+app.include_router(plan.router)
+app.include_router(progress.router)
+app.include_router(data.router)
 
 
 @app.get("/api/health")

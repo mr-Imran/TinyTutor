@@ -204,6 +204,41 @@ CREATE INDEX IF NOT EXISTS idx_chunks_document ON knowledge_chunks(document_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_flashcards_due ON flashcards(user_id, due_at);
 CREATE INDEX IF NOT EXISTS idx_mastery_events_topic ON mastery_events(user_id, topic);
+
+CREATE TABLE IF NOT EXISTS chunk_embeddings (
+    chunk_id INTEGER PRIMARY KEY,
+    model TEXT NOT NULL,
+    dim INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    FOREIGN KEY (chunk_id) REFERENCES knowledge_chunks(id)
+);
+
+CREATE TRIGGER IF NOT EXISTS chunks_embedding_delete AFTER DELETE ON knowledge_chunks BEGIN
+    DELETE FROM chunk_embeddings WHERE chunk_id = old.id;
+END;
+
+-- Edited text makes the stored embedding stale.
+CREATE TRIGGER IF NOT EXISTS chunks_embedding_update AFTER UPDATE OF content ON knowledge_chunks BEGIN
+    DELETE FROM chunk_embeddings WHERE chunk_id = old.id;
+END;
+
+CREATE TABLE IF NOT EXISTS daily_plans (
+    user_id INTEGER NOT NULL,
+    plan_date TEXT NOT NULL,
+    tasks_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, plan_date),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS badges (
+    user_id INTEGER NOT NULL,
+    badge_id TEXT NOT NULL,
+    earned_at TEXT NOT NULL,
+    seen INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, badge_id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
 """
 
 FTS_SCHEMA = """
@@ -239,8 +274,10 @@ COLUMN_MIGRATIONS = {
         "summary": "TEXT",
         "concepts_json": "TEXT",
         "summary_status": "TEXT",
+        "source_url": "TEXT",
     },
-    "knowledge_chunks": {"page_number": "INTEGER"},
+    "knowledge_chunks": {"page_number": "INTEGER", "start_seconds": "INTEGER"},
+    "flashcards": {"annotation_id": "INTEGER"},
 }
 
 

@@ -53,6 +53,19 @@ async def generate(body: GenerateBody):
     return {"created": cards}
 
 
+class FromHighlightsBody(BaseModel):
+    document_id: int
+    marker_ids: list[int] | None = None
+
+
+@router.post("/from-highlights")
+async def from_highlights(body: FromHighlightsBody):
+    try:
+        return await flashcards.cards_from_highlights(USER_ID, body.document_id, body.marker_ids)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 @router.post("")
 def create(body: CardBody):
     return flashcards.create_cards(USER_ID, body.topic.strip(), [body.model_dump()])

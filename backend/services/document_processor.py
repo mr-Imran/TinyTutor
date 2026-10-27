@@ -1,6 +1,7 @@
 import logging
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -9,16 +10,27 @@ from pptx import Presentation
 
 from config import CHUNK_OVERLAP, CHUNK_SIZE, UPLOAD_DIR
 from database import get_db
+from services import llm
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = (".pdf", ".pptx", ".docx", ".txt", ".md")
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+SUPPORTED_EXTENSIONS = (".pdf", ".pptx", ".docx", ".txt", ".md", *IMAGE_TYPES)
 
-# A PDF page with less text than this is treated as scanned and sent to OCR.
+# A PDF page with less text than this is treated as scanned: OCR first, then a vision model.
 OCR_MIN_CHARS = 25
+# Upper bound on pages sent to a vision model per upload, to keep time and cost predictable.
+VISION_MAX_PAGES = 30
+VISION_DPI = 150
 
-# (page_number, text) — page_number is 1-based; None when the format has no pages.
-Segment = tuple[int | None, str]
+
+@dataclass
+class Segment:
+    text: str
+    page_number: int | None = None  # 1-based page or slide; None for page-less formats
+    start_seconds: int | None = None  # position in a video transcript
+    # Rendered page image for scanned pages the text layer and OCR could not read.
+    image: bytes | None = None
 
 
 def extract_pdf_segments(path: Path) -> list[Segment]:
@@ -26,9 +38,12 @@ def extract_pdf_segments(path: Path) -> list[Segment]:
     with fitz.open(path) as doc:
         for i, page in enumerate(doc, 1):
             text = page.get_text()
+            image = None
             if len(text.strip()) < OCR_MIN_CHARS:
                 text = _ocr_page(page) or text
-            segments.append((i, text))
+                if len(text.strip()) < OCR_MIN_CHARS:
+                    image = page.get_pixmap(dpi=VISION_DPI).tobytes("png")
+            segments.append(Segment(text, page_number=i, image=image))
     return segments
 
 
@@ -50,7 +65,7 @@ def extract_pptx_segments(path: Path) -> list[Segment]:
             notes = slide.notes_slide.notes_text_frame.text.strip()
             if notes:
                 parts.append(notes)
-        segments.append((i, "\n\n".join(parts)))
+        segments.append(Segment("\n\n".join(parts), page_number=i))
     return segments
 
 
@@ -64,11 +79,15 @@ def extract_docx_segments(path: Path) -> list[Segment]:
             cells = [c.text.strip() for c in row.cells if c.text.strip()]
             if cells:
                 parts.append(" | ".join(cells))
-    return [(None, "\n\n".join(parts))]
+    return [Segment("\n\n".join(parts))]
 
 
 def extract_text_segments(path: Path) -> list[Segment]:
-    return [(None, path.read_text(encoding="utf-8", errors="replace"))]
+    return [Segment(path.read_text(encoding="utf-8", errors="replace"))]
+
+
+def extract_image_segments(path: Path) -> list[Segment]:
+    return [Segment("", page_number=1, image=path.read_bytes())]
 
 
 EXTRACTORS = {
@@ -77,11 +96,30 @@ EXTRACTORS = {
     ".docx": ("docx", extract_docx_segments),
     ".txt": ("txt", extract_text_segments),
     ".md": ("md", extract_text_segments),
+    **{ext: ("image", extract_image_segments) for ext in IMAGE_TYPES},
 }
 
 
-def guess_topic(filename: str, text: str) -> str:
-    name = Path(filename).stem.replace("_", " ").replace("-", " ")
+async def read_images(segments: list[Segment], mime: str = "image/png") -> list[str]:
+    """Fill in text for image segments with the vision model. Returns any error messages."""
+    errors = []
+    pending = [s for s in segments if s.image is not None]
+    for i, seg in enumerate(pending):
+        if i >= VISION_MAX_PAGES:
+            errors.append(f"Only the first {VISION_MAX_PAGES} image pages were read.")
+            break
+        try:
+            seg.text = await llm.describe_image(seg.image, mime)
+        except llm.LLMError as e:
+            errors.append(f"Vision model could not read page {seg.page_number}: {e}")
+            break  # the same failure would repeat for every page
+    for seg in segments:
+        seg.image = None
+    return errors
+
+
+def guess_topic(title: str, text: str) -> str:
+    name = title.replace("_", " ").replace("-", " ").strip()
     if len(name) > 3:
         return name.title()[:80]
     first_line = text.strip().split("\n")[0][:80] if text.strip() else "General"
@@ -133,29 +171,79 @@ def _pack_paragraphs(text: str) -> list[str]:
 
 def chunk_segments(segments: list[Segment], title: str, topic: str, source: str) -> list[dict]:
     chunks = []
-    for page_number, text in segments:
-        for piece in _pack_paragraphs(text):
+    for seg in segments:
+        for piece in _pack_paragraphs(seg.text):
             chunks.append(
                 {
                     "title": f"{title} — Part {len(chunks) + 1}",
                     "topic": topic,
                     "content": piece,
                     "source": source,
-                    "page_number": page_number,
+                    "page_number": seg.page_number,
+                    "start_seconds": seg.start_seconds,
                 }
             )
     return chunks
 
 
 def chunk_text(text: str, title: str, topic: str, source: str) -> list[dict]:
-    return chunk_segments([(None, text)], title, topic, source)
+    return chunk_segments([Segment(text)], title, topic, source)
 
 
 def safe_filename(name: str) -> str:
     return re.sub(r"[^\w.\-]", "_", name)
 
 
-def process_upload(user_id: int, filename: str, file_bytes: bytes) -> dict:
+def save_document(
+    user_id: int,
+    *,
+    filename: str,
+    file_type: str,
+    title: str,
+    segments: list[Segment],
+    topic: str | None = None,
+    stored_name: str | None = None,
+    source_url: str | None = None,
+    page_count: int = 0,
+) -> dict:
+    """Chunk segments and store the document plus its chunks."""
+    full_text = "\n\n".join(s.text for s in segments)
+    topic = (topic or "").strip() or guess_topic(title, full_text)
+    chunks = chunk_segments(segments, title, topic, filename)
+    now = datetime.utcnow().isoformat()
+
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO documents (user_id, filename, stored_name, source_url, file_type, title, topic,
+                                      page_count, chunk_count, summary_status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
+            (user_id, filename, stored_name, source_url, file_type, title, topic, page_count, len(chunks), now),
+        )
+        doc_id = cur.lastrowid
+        conn.executemany(
+            """INSERT INTO knowledge_chunks
+               (document_id, user_id, title, topic, content, source, page_number, start_seconds, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (doc_id, user_id, ch["title"], ch["topic"], ch["content"], ch["source"],
+                 ch["page_number"], ch["start_seconds"], now)
+                for ch in chunks
+            ],
+        )
+
+    return {
+        "document_id": doc_id,
+        "title": title,
+        "topic": topic,
+        "file_type": file_type,
+        "page_count": page_count,
+        "chunk_count": len(chunks),
+        "empty": not chunks,
+        "warnings": [],
+    }
+
+
+async def process_upload(user_id: int, filename: str, file_bytes: bytes, topic: str | None = None) -> dict:
     ext = Path(filename).suffix.lower()
     if ext not in EXTRACTORS:
         raise ValueError(f"Supported file types: {', '.join(SUPPORTED_EXTENSIONS)}")
@@ -173,37 +261,16 @@ def process_upload(user_id: int, filename: str, file_bytes: bytes) -> dict:
         save_path.unlink(missing_ok=True)
         raise ValueError(f"Could not read {filename}: {e}") from e
 
-    full_text = "\n\n".join(t for _, t in segments)
-    page_count = sum(1 for p, _ in segments if p is not None)
-    title = Path(filename).stem
-    topic = guess_topic(filename, full_text)
-    chunks = chunk_segments(segments, title, topic, filename)
-    now = datetime.utcnow().isoformat()
-
-    with get_db() as conn:
-        cur = conn.execute(
-            """INSERT INTO documents (user_id, filename, stored_name, file_type, title, topic,
-                                      page_count, chunk_count, summary_status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
-            (user_id, filename, stored_name, file_type, title, topic, page_count, len(chunks), now),
-        )
-        doc_id = cur.lastrowid
-        conn.executemany(
-            """INSERT INTO knowledge_chunks
-               (document_id, user_id, title, topic, content, source, page_number, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                (doc_id, user_id, ch["title"], ch["topic"], ch["content"], ch["source"], ch["page_number"], now)
-                for ch in chunks
-            ],
-        )
-
-    return {
-        "document_id": doc_id,
-        "title": title,
-        "topic": topic,
-        "file_type": file_type,
-        "page_count": page_count,
-        "chunk_count": len(chunks),
-        "empty": not chunks,
-    }
+    warnings = await read_images(segments, IMAGE_TYPES.get(ext, "image/png"))
+    result = save_document(
+        user_id,
+        filename=filename,
+        file_type=file_type,
+        title=Path(filename).stem,
+        segments=segments,
+        topic=topic,
+        stored_name=stored_name,
+        page_count=sum(1 for s in segments if s.page_number is not None),
+    )
+    result["warnings"] = warnings
+    return result

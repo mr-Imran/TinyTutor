@@ -23,6 +23,8 @@ ALLOWED_TABLES = [
     "chat_messages",
     "mock_exams",
     "mastery_events",
+    "daily_plans",
+    "badges",
 ]
 
 MANUAL_FILENAME = "__manual_context__"

@@ -57,9 +57,9 @@ def create_cards(user_id: int, topic: str, cards: list[dict], document_id: int |
                 continue
             existing.add(front.lower())
             cur = conn.execute(
-                """INSERT INTO flashcards (user_id, document_id, topic, front, back, due_at, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, document_id, topic, front, back, now, now),
+                """INSERT INTO flashcards (user_id, document_id, annotation_id, topic, front, back, due_at, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, document_id, c.get("annotation_id"), topic, front, back, now, now),
             )
             ids.append(cur.lastrowid)
         if not ids:
@@ -111,6 +111,66 @@ async def generate_cards(
     if not isinstance(cards, list):
         raise ValueError("The AI returned no cards, please try again")
     return create_cards(user_id, topic, [c for c in cards if isinstance(c, dict)][:count], document_id)
+
+
+HIGHLIGHT_SYSTEM = (
+    "You turn a student's highlighted passages into flashcards. Return ONLY valid JSON, no markdown: "
+    '{"cards":[{"n":1,"front":"question that the highlight answers","back":"answer in 1-2 sentences"}]}. '
+    "Write exactly one card per numbered highlight and keep its number in n. "
+    "If the student wrote a note, use it to decide what the question should focus on."
+)
+
+
+def _fallback_card(text: str, note: str | None) -> dict:
+    """Used when the AI is unavailable: the note (or the opening words) prompts the passage."""
+    words = text.split()
+    prompt = note.strip() if note and note.strip() else " ".join(words[:8]) + ("…" if len(words) > 8 else "")
+    return {"front": f"Recall: {prompt}", "back": text}
+
+
+async def cards_from_highlights(
+    user_id: int, document_id: int, marker_ids: list[int] | None = None
+) -> dict:
+    """One flashcard per highlight/note that does not have a card yet."""
+    with get_db() as conn:
+        doc = conn.execute(
+            "SELECT topic FROM documents WHERE id = ? AND user_id = ?", (document_id, user_id)
+        ).fetchone()
+        if not doc:
+            raise ValueError("Document not found")
+        rows = conn.execute(
+            """SELECT a.id, a.selected_text, a.note FROM document_annotations a
+               WHERE a.user_id = ? AND a.document_id = ?
+                 AND NOT EXISTS (SELECT 1 FROM flashcards f WHERE f.annotation_id = a.id)
+               ORDER BY a.id""",
+            (user_id, document_id),
+        ).fetchall()
+    highlights = [dict(r) for r in rows if not marker_ids or r["id"] in marker_ids]
+    if not highlights:
+        return {"created": [], "skipped": 0, "used_ai": False}
+
+    numbered = "\n\n".join(
+        f"[{i}] {h['selected_text'].strip()}" + (f"\nStudent note: {h['note'].strip()}" if h["note"] else "")
+        for i, h in enumerate(highlights, 1)
+    )
+    by_n: dict[int, dict] = {}
+    used_ai = True
+    try:
+        raw = await llm.complete([{"role": "user", "content": f"Highlights:\n\n{numbered}"}],
+                                 system=HIGHLIGHT_SYSTEM, json_mode=True)
+        data = json.loads(_extract_json(raw))
+        for c in (data.get("cards") if isinstance(data, dict) else data) or []:
+            if isinstance(c, dict) and str(c.get("n", "")).isdigit():
+                by_n[int(c["n"])] = c
+    except (llm.LLMError, json.JSONDecodeError, TypeError, AttributeError):
+        used_ai = False
+
+    cards = []
+    for i, h in enumerate(highlights, 1):
+        card = by_n.get(i) or _fallback_card(h["selected_text"], h["note"])
+        cards.append({"front": card.get("front"), "back": card.get("back"), "annotation_id": h["id"]})
+    created = create_cards(user_id, doc["topic"] or "General", cards, document_id)
+    return {"created": created, "skipped": len(cards) - len(created), "used_ai": used_ai and bool(by_n)}
 
 
 def due_cards(user_id: int, limit: int = 20, topic: str | None = None) -> list[dict]:

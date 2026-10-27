@@ -3,6 +3,7 @@
 All providers take the same input: a system prompt plus a list of
 {"role": "user" | "assistant", "content": str} messages.
 """
+import base64
 import json
 from typing import AsyncIterator
 
@@ -32,6 +33,7 @@ _CLAUDE_EFFORT_PREFIXES = (
 _CLAUDE_FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
 
 TIMEOUT = 120.0
+VISION_TIMEOUT = 300.0
 MAX_TOKENS = 16000
 
 
@@ -90,6 +92,90 @@ async def stream(messages: list[dict], system: str = "", cfg: dict | None = None
         raise
     except Exception as e:
         raise LLMError(str(e)) from e
+
+
+VISION_PROMPT = (
+    "Transcribe all text in this image exactly, keeping the reading order. "
+    "Then describe every diagram, chart, table or figure in plain sentences so a student "
+    "can study from the description alone. Do not use markdown."
+)
+
+
+async def describe_image(image: bytes, mime: str, prompt: str = VISION_PROMPT, cfg: dict | None = None) -> str:
+    """Send one image to the active provider's vision model and return its text."""
+    cfg = dict(cfg or get_llm_config())
+    # Ollama text models usually cannot see; a separate vision model can be set (e.g. qwen2.5vl).
+    cfg["model"] = get_setting(f"llm_vision_model_{cfg['provider']}") or cfg.get("model")
+    if not cfg.get("model"):
+        raise LLMError(f"No model selected for {cfg['provider']}.")
+    try:
+        return await _VISION[cfg["provider"]](cfg, image, mime, prompt)
+    except LLMError:
+        raise
+    except Exception as e:
+        raise LLMError(str(e)) from e
+
+
+async def _ollama_vision(cfg, image, mime, prompt):
+    body = {
+        "model": cfg["model"],
+        "messages": [{"role": "user", "content": prompt, "images": [base64.b64encode(image).decode()]}],
+        "stream": False,
+    }
+    async with httpx.AsyncClient(timeout=VISION_TIMEOUT) as client:
+        resp = await client.post(f"{cfg['base_url']}/api/chat", json=body)
+        resp.raise_for_status()
+        data = resp.json()
+    log_usage("ollama/vision", cfg["model"], data.get("prompt_eval_count"), data.get("eval_count"))
+    return data["message"]["content"]
+
+
+async def _openai_vision(cfg, image, mime, prompt):
+    data_url = f"data:{mime};base64,{base64.b64encode(image).decode()}"
+    body = {
+        "model": cfg["model"],
+        "messages": [{
+            "role": "user",
+            "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": data_url}}],
+        }],
+    }
+    async with httpx.AsyncClient(timeout=VISION_TIMEOUT) as client:
+        resp = await client.post(f"{cfg['base_url']}/chat/completions", json=body, headers=_openai_headers(cfg))
+        resp.raise_for_status()
+        data = resp.json()
+    usage = data.get("usage") or {}
+    log_usage("openai/vision", cfg["model"], usage.get("prompt_tokens"), usage.get("completion_tokens"))
+    return data["choices"][0]["message"].get("content") or ""
+
+
+async def _anthropic_vision(cfg, image, mime, prompt):
+    client = _anthropic_client(cfg)
+    content = [
+        {"type": "image", "source": {"type": "base64", "media_type": mime, "data": base64.b64encode(image).decode()}},
+        {"type": "text", "text": prompt},
+    ]
+    params = _anthropic_params(cfg, [{"role": "user", "content": "x"}], "")
+    params["messages"] = [{"role": "user", "content": content}]
+    resp = await client.beta.messages.create(**params)
+    log_usage("anthropic/vision", resp.model, resp.usage.input_tokens, resp.usage.output_tokens)
+    if resp.stop_reason == "refusal":
+        raise LLMError("Claude declined to read this image.")
+    return "".join(b.text for b in resp.content if b.type == "text")
+
+
+async def _gemini_vision(cfg, image, mime, prompt):
+    body = {"contents": [{"role": "user", "parts": [
+        {"inline_data": {"mime_type": mime, "data": base64.b64encode(image).decode()}},
+        {"text": prompt},
+    ]}]}
+    url = f"{GEMINI_BASE}/models/{cfg['model']}:generateContent"
+    async with httpx.AsyncClient(timeout=VISION_TIMEOUT) as client:
+        resp = await client.post(url, json=body, headers=_gemini_headers(cfg))
+        resp.raise_for_status()
+        data = resp.json()
+    usage = data.get("usageMetadata") or {}
+    log_usage("gemini/vision", cfg["model"], usage.get("promptTokenCount"), usage.get("candidatesTokenCount"))
+    return _gemini_text(data)
 
 
 async def list_models(provider: str) -> list[str]:
@@ -341,6 +427,12 @@ _STREAM = {
     "openai": _openai_stream,
     "anthropic": _anthropic_stream,
     "gemini": _gemini_stream,
+}
+_VISION = {
+    "ollama": _ollama_vision,
+    "openai": _openai_vision,
+    "anthropic": _anthropic_vision,
+    "gemini": _gemini_vision,
 }
 _MODELS = {
     "ollama": _ollama_models,

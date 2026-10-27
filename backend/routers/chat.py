@@ -49,11 +49,11 @@ async def run_chat(kind: str, req: ChatRequest) -> dict:
     return {**result, "session_id": session_id}
 
 
-def stream_chat(kind: str, req: ChatRequest) -> StreamingResponse:
+async def stream_chat(kind: str, req: ChatRequest) -> StreamingResponse:
     """Streams plain text. Session id and citation sources travel in response headers."""
     session_id, history = _open_session(kind, req)
     message = req.message.strip()
-    prompt, system, history, sources = prepare_chat(USER_ID, kind, message, req.topic, history)
+    prompt, system, history, sources = await prepare_chat(USER_ID, kind, message, req.topic, history)
 
     async def event_stream():
         full, errors = "", []
@@ -80,7 +80,7 @@ async def chat(req: ChatRequest):
 
 @router.post("/stream")
 async def chat_stream(req: ChatRequest):
-    return stream_chat("tutor", req)
+    return await stream_chat("tutor", req)
 
 
 @router.get("/topics")
