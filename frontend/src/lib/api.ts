@@ -56,6 +56,8 @@ export const api = {
   search: (q: string, limit = 20) =>
     request<{ query: string; results: SearchHit[] }>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`),
 
+  importUrl: (url: string, topic?: string) =>
+    request<UploadResult>("/api/documents/import-url", { method: "POST", body: JSON.stringify({ url, topic }) }),
   document: (id: number) => request<Document>(`/api/documents/${id}`),
   resummarize: (id: number) => request<Document>(`/api/documents/${id}/summarize`, { method: "POST" }),
 
@@ -67,6 +69,52 @@ export const api = {
       `/api/settings/llm/models?provider=${provider}`
     ),
   llmHealth: () => request<LlmHealth>("/api/settings/llm/health"),
+  embeddingSettings: () => request<EmbeddingSettings>("/api/settings/embeddings"),
+  saveEmbeddingSettings: (body: { provider?: string; model?: string }) =>
+    request<EmbeddingSettings>("/api/settings/embeddings", { method: "PUT", body: JSON.stringify(body) }),
+  reindexEmbeddings: () =>
+    request<EmbeddingSettings & { embedded: number; error: string | null }>("/api/settings/embeddings/reindex", {
+      method: "POST",
+    }),
+  visionSettings: () => request<Record<LlmProvider, string>>("/api/settings/vision"),
+  saveVisionSettings: (provider: LlmProvider, model: string) =>
+    request<Record<LlmProvider, string>>("/api/settings/vision", {
+      method: "PUT",
+      body: JSON.stringify({ provider, model }),
+    }),
+
+  todayPlan: () => request<DailyPlan>("/api/plan/today"),
+  regeneratePlan: () => request<DailyPlan>("/api/plan/today/regenerate", { method: "POST" }),
+  togglePlanTask: (taskId: string) =>
+    request<DailyPlan>(`/api/plan/tasks/${encodeURIComponent(taskId)}/toggle`, { method: "POST" }),
+
+  progress: () => request<Progress>("/api/progress"),
+  setDailyGoal: (daily_goal: number) =>
+    request<Progress>("/api/progress/goal", { method: "PUT", body: JSON.stringify({ daily_goal }) }),
+  markBadgesSeen: () => request("/api/progress/badges/seen", { method: "POST" }),
+
+  restoreBackup: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<{ documents: number; flashcards: number; files: number; safety_copy: string }>(
+      "/api/data/restore",
+      { method: "POST", body: fd }
+    );
+  },
+  importFlashcards: (file: File, topic: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("topic", topic);
+    return request<{ imported: number; skipped: number; topics: string[] }>("/api/data/flashcards/import", {
+      method: "POST",
+      body: fd,
+    });
+  },
+  flashcardsFromHighlights: (document_id: number, marker_ids?: number[]) =>
+    request<{ created: Flashcard[]; skipped: number; used_ai: boolean }>("/api/flashcards/from-highlights", {
+      method: "POST",
+      body: JSON.stringify({ document_id, marker_ids }),
+    }),
 
   flashcards: (topic?: string) =>
     request<Flashcard[]>(`/api/flashcards${topic ? `?topic=${encodeURIComponent(topic)}` : ""}`),
@@ -215,6 +263,37 @@ export function pdfPageUrl(docId: number, page?: number | null) {
   return `${pdfFileUrl(docId)}${page ? `#page=${page}` : ""}`;
 }
 
+/** Where a cited note lives: a PDF page, a moment in a YouTube video, or the web page. */
+export function sourceLink(s: {
+  document_id?: number | null;
+  file_type?: string | null;
+  page_number?: number | null;
+  source_url?: string | null;
+  start_seconds?: number | null;
+}): string | undefined {
+  if (s.file_type === "pdf" && s.document_id) return pdfPageUrl(s.document_id, s.page_number);
+  if (s.file_type === "youtube" && s.source_url) {
+    return s.start_seconds != null ? `${s.source_url}&t=${s.start_seconds}s` : s.source_url;
+  }
+  if (s.source_url) return s.source_url;
+  return undefined;
+}
+
+export function formatTimestamp(seconds: number) {
+  const m = Math.floor(seconds / 60);
+  return `${m}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/** Plain links: the browser downloads these straight from the backend. */
+export const downloads = {
+  backup: () => `${API}/api/data/backup`,
+  flashcardsCsv: () => `${API}/api/data/flashcards.csv`,
+  flashcardsApkg: () => `${API}/api/data/flashcards.apkg`,
+  quizHistoryCsv: () => `${API}/api/data/quiz-history.csv`,
+  calendar: (days: number, hour: number, minute = 0) =>
+    `${API}/api/plan/calendar.ics?days=${days}&hour=${hour}&minute=${minute}`,
+};
+
 function decodeSources(header: string | null): ChatSource[] {
   if (!header) return [];
   try {
@@ -309,6 +388,7 @@ export interface Document {
   summary?: string | null;
   summary_status?: "pending" | "running" | "done" | "failed" | "empty" | null;
   concepts?: Concept[];
+  source_url?: string | null;
 }
 
 export interface UploadResult {
@@ -319,6 +399,7 @@ export interface UploadResult {
   page_count: number;
   chunk_count: number;
   empty: boolean;
+  warnings: string[];
 }
 
 export type ChatKind = "tutor" | "mentor";
@@ -331,6 +412,8 @@ export interface ChatSource {
   source?: string | null;
   page_number?: number | null;
   file_type?: string | null;
+  source_url?: string | null;
+  start_seconds?: number | null;
   preview?: string;
 }
 
@@ -369,7 +452,62 @@ export interface SearchHit {
   source: string;
   page_number: number | null;
   file_type: string | null;
+  source_url: string | null;
+  start_seconds: number | null;
   snippet: string;
+  semantic_score: number | null;
+}
+
+export interface EmbeddingSettings {
+  choice: string;
+  choices: string[];
+  defaults: Record<string, string>;
+  provider: string | null;
+  model: string | null;
+  indexed: number;
+  total: number;
+}
+
+export interface PlanTask {
+  id: string;
+  kind: "upload" | "flashcards" | "study" | "quiz" | "mock_exam" | "read";
+  title: string;
+  detail: string;
+  minutes: number;
+  link: string;
+  done: boolean;
+  topic?: string;
+}
+
+export interface DailyPlan {
+  date: string;
+  tasks: PlanTask[];
+  total_minutes: number;
+  done_count: number;
+  complete: boolean;
+}
+
+export interface Badge {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  earned_at: string | null;
+  new: boolean;
+}
+
+export interface Progress {
+  xp: number;
+  level: number;
+  level_xp: number;
+  level_size: number;
+  today_xp: number;
+  daily_goal: number;
+  week: { date: string; xp: number }[];
+  current_streak: number;
+  longest_streak: number;
+  badges: Badge[];
+  earned_count: number;
 }
 
 export type LlmProvider = "ollama" | "openai" | "anthropic" | "gemini";

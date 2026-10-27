@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { CheckCircle2, Cpu, Database, KeyRound, RefreshCw, Server, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
+import { DataCard, EmbeddingsCard, VisionModelField } from "@/components/SettingsExtras";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -215,6 +216,8 @@ export default function SettingsPage() {
                 </span>
               </label>
 
+              <VisionModelField provider={provider} />
+
               <div className="flex items-center gap-3">
                 <Button onClick={save} disabled={saving || !model}>
                   {saving ? "Saving…" : "Save & use this model"}
@@ -223,6 +226,14 @@ export default function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.03 }}>
+          <EmbeddingsCard />
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.04 }}>
+          <DataCard />
         </motion.div>
 
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}>
@@ -252,7 +263,7 @@ export default function SettingsPage() {
               <ul className="list-inside list-disc space-y-1">
                 <li>SQLite database: backend/data/tutor.db</li>
                 <li>Uploads: backend/data/uploads/</li>
-                <li>Full-text search (SQLite FTS5) — no vector database</li>
+                <li>Hybrid search: SQLite FTS5 keywords + embeddings stored in SQLite</li>
                 <li>A practice question for your weakest topic every 30 minutes</li>
               </ul>
             </CardContent>

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Send, Bot, User, Plus, MessageSquare, Trash2 } from "lucide-react";
+import { Send, Bot, User, Plus, MessageSquare, Trash2, Mic, Square, Volume2, VolumeX } from "lucide-react";
 import { CitedText } from "@/components/CitedText";
 import { HumanText } from "@/components/HumanText";
 import { PageHeader } from "@/components/PageHeader";
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, ChatSession, ChatSource, streamChat } from "@/lib/api";
+import { canSpeak, speak, stopSpeaking, useSpeechRecognition } from "@/lib/speech";
 
 type Message = { role: "user" | "assistant"; content: string; sources?: ChatSource[] };
 
@@ -27,6 +28,8 @@ export default function TutorPage() {
   const [loading, setLoading] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionId, setSessionId] = useState<number | null>(null);
+  const [readAloud, setReadAloud] = useState(false);
+  const [ttsAvailable, setTtsAvailable] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -45,6 +48,14 @@ export default function TutorPage() {
 
   useEffect(() => {
     return () => abortRef.current?.abort();
+  }, []);
+
+  // Speaking a question sends it as soon as the speaker pauses.
+  const voice = useSpeechRecognition((text) => send(text));
+
+  useEffect(() => {
+    setTtsAvailable(canSpeak());
+    return stopSpeaking;
   }, []);
 
   const openSession = async (id: number) => {
@@ -70,9 +81,9 @@ export default function TutorPage() {
     loadSessions();
   };
 
-  const send = async () => {
-    if (!input.trim() || loading) return;
-    const userMsg = input.trim();
+  const send = async (spoken?: string) => {
+    const userMsg = (spoken ?? input).trim();
+    if (!userMsg || loading) return;
     setInput("");
     setMessages((m) => [...m, { role: "user", content: userMsg }, { role: "assistant", content: "" }]);
     setLoading(true);
@@ -94,6 +105,7 @@ export default function TutorPage() {
         controller.signal
       );
       if (result.sessionId && result.sessionId !== sessionId) setSessionId(result.sessionId);
+      if (readAloud) speak(result.text);
       loadSessions();
     } catch {
       setLast({ role: "assistant", content: "Could not reach the AI. Is the backend running and an AI provider set up in Settings?" });
@@ -197,12 +209,41 @@ export default function TutorPage() {
 
           <div className="flex gap-2 border-t border-white/10 p-4">
             <Input
-              placeholder={sessionId ? "Ask a follow-up…" : "Ask about your textbooks…"}
-              value={input}
+              placeholder={
+                voice.listening ? "Listening…" : sessionId ? "Ask a follow-up…" : "Ask about your textbooks…"
+              }
+              value={voice.listening ? voice.interim : input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && send()}
+              readOnly={voice.listening}
             />
-            <Button onClick={send} disabled={loading} size="icon">
+            {voice.supported && (
+              <Button
+                variant={voice.listening ? "default" : "outline"}
+                size="icon"
+                onClick={voice.listening ? voice.stop : voice.start}
+                disabled={loading}
+                aria-label={voice.listening ? "Stop listening" : "Ask by voice"}
+                title={voice.error ?? (voice.listening ? "Stop listening" : "Ask by voice")}
+              >
+                {voice.listening ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              </Button>
+            )}
+            {ttsAvailable && (
+              <Button
+                variant={readAloud ? "default" : "outline"}
+                size="icon"
+                onClick={() => {
+                  if (readAloud) stopSpeaking();
+                  setReadAloud(!readAloud);
+                }}
+                aria-label={readAloud ? "Stop reading answers aloud" : "Read answers aloud"}
+                title={readAloud ? "Reading answers aloud" : "Read answers aloud"}
+              >
+                {readAloud ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+              </Button>
+            )}
+            <Button onClick={() => send()} disabled={loading} size="icon" aria-label="Send">
               <Send className="h-4 w-4" />
             </Button>
           </div>

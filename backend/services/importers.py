@@ -12,7 +12,21 @@ MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 # Transcript lines are grouped into windows of about this many seconds per segment.
 TRANSCRIPT_WINDOW_SECONDS = 90
 USER_AGENT = "Mozilla/5.0 (compatible; TinyTutor/2.0; +https://github.com/mr-Imran/TinyTutor)"
-STRIP_TAGS = ("script", "style", "noscript", "nav", "header", "footer", "aside", "form", "svg", "iframe")
+STRIP_TAGS = ("script", "style", "noscript", "nav", "header", "footer", "aside", "form", "svg", "iframe", "sup")
+# Page furniture recognised by class or id: menus, reference lists, share bars, cookie banners…
+BOILERPLATE = re.compile(
+    r"(^|[-_ ])(nav|navbox|menu|footer|sidebar|comments?|share|social|related|references?|reflist|"
+    r"cookie|toc|breadcrumbs?|editsection|advert|ads|promo|newsletter|catlinks)([-_ ]|$)",
+    re.I,
+)
+# Headings that start an article's back matter; nothing after them is study content.
+BACK_MATTER = re.compile(
+    r"^(see also|references|notes|footnotes|citations|sources|bibliography|further reading|"
+    r"external links|related articles|comments)$",
+    re.I,
+)
+# "Article title - Site name" / "Article | Site" -> "Article title"
+TITLE_SUFFIX = re.compile(r"\s+[-|–—:]\s+[^-|–—:]{2,40}$")
 
 _YT_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
@@ -104,17 +118,31 @@ def extract_article(html: str) -> tuple[str, str]:
     title = (og.get("content") if og else None) or (soup.title.string if soup.title else "") or "Web page"
     for tag in soup(STRIP_TAGS):
         tag.decompose()
+    for tag in soup.find_all(True):
+        if tag.decomposed:
+            continue
+        marker = " ".join(tag.get("class") or []) + " " + (tag.get("id") or "")
+        if BOILERPLATE.search(marker) and tag.name not in ("body", "html", "main", "article"):
+            tag.decompose()
     root = soup.find("article") or soup.find("main") or soup.body or soup
     blocks = []
     for el in root.find_all(["h1", "h2", "h3", "h4", "p", "li", "pre", "blockquote", "td"]):
         if el.find_parent(["li", "blockquote", "td"]) and el.name in ("p",):
             continue  # already captured through its container
         text = re.sub(r"\s+", " ", el.get_text(" ", strip=True))
+        if el.name in ("h2", "h3") and BACK_MATTER.match(text) and blocks:
+            break
         if len(text) >= 3:
             blocks.append(text)
     if not blocks:  # pages built from divs only
         blocks = [re.sub(r"\s+", " ", t) for t in root.get_text("\n", strip=True).split("\n") if len(t.strip()) > 2]
-    return re.sub(r"\s+", " ", title).strip()[:200], "\n\n".join(dict.fromkeys(blocks))
+    return clean_title(title), "\n\n".join(dict.fromkeys(blocks))
+
+
+def clean_title(title: str) -> str:
+    title = re.sub(r"\s+", " ", title).strip()
+    shorter = TITLE_SUFFIX.sub("", title)
+    return (shorter if len(shorter) >= 4 else title)[:200]
 
 
 async def import_url(user_id: int, url: str, topic: str | None = None) -> dict:

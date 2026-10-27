@@ -119,7 +119,7 @@ async def read_images(segments: list[Segment], mime: str = "image/png") -> list[
 
 
 def guess_topic(title: str, text: str) -> str:
-    name = title.replace("_", " ").replace("-", " ").strip()
+    name = re.sub(r"\s+", " ", title.replace("_", " ").replace("-", " ")).strip()
     if len(name) > 3:
         return name.title()[:80]
     first_line = text.strip().split("\n")[0][:80] if text.strip() else "General"

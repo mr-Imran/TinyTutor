@@ -1,16 +1,16 @@
 "use client";
 
 import { FileText } from "lucide-react";
-import { ChatSource, pdfPageUrl } from "@/lib/api";
+import { ChatSource, formatTimestamp, sourceLink } from "@/lib/api";
 
 function sourceLabel(s: ChatSource) {
   const name = s.source || s.title || "Notes";
-  return s.page_number ? `${name} · p.${s.page_number}` : name;
+  if (s.page_number) return `${name} · p.${s.page_number}`;
+  if (s.start_seconds != null) return `${name} · ${formatTimestamp(s.start_seconds)}`;
+  return name;
 }
 
-function sourceHref(s: ChatSource) {
-  return s.file_type === "pdf" && s.document_id ? pdfPageUrl(s.document_id, s.page_number) : undefined;
-}
+const sourceHref = sourceLink;
 
 function CitationChip({ source, n }: { source?: ChatSource; n: number }) {
   const className =

@@ -2,15 +2,32 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, FileUp, Trash2, FileText, Presentation } from "lucide-react";
+import { ChevronDown, FileUp, Trash2, FileText, Globe, Image as ImageIcon, Link2, Presentation, Youtube } from "lucide-react";
 import { DocumentInsights } from "@/components/DocumentInsights";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, Document } from "@/lib/api";
+import { api, Document, UploadResult } from "@/lib/api";
 
-const ACCEPTED = [".pdf", ".pptx", ".docx", ".txt", ".md"];
+const ACCEPTED = [".pdf", ".pptx", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".webp"];
+
+function DocIcon({ type }: { type: string }) {
+  if (type === "pdf") return <FileText className="h-8 w-8 text-red-400" />;
+  if (type === "pptx") return <Presentation className="h-8 w-8 text-orange-400" />;
+  if (type === "youtube") return <Youtube className="h-8 w-8 text-red-500" />;
+  if (type === "web") return <Globe className="h-8 w-8 text-cyan-400" />;
+  if (type === "image") return <ImageIcon className="h-8 w-8 text-emerald-400" />;
+  return <FileText className="h-8 w-8 text-sky-400" />;
+}
+
+function describeResult(result: UploadResult) {
+  const base = result.empty
+    ? `Added "${result.title}" but found no readable text.`
+    : `Added "${result.title}" — ${result.chunk_count} chunks stored. Writing a summary…`;
+  return result.warnings?.length ? `${base} ${result.warnings.join(" ")}` : base;
+}
 
 export default function UploadPage() {
   const [docs, setDocs] = useState<Document[]>([]);
@@ -19,6 +36,8 @@ export default function UploadPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [url, setUrl] = useState("");
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(() => {
     api.documents().then(setDocs).catch(console.error).finally(() => setLoading(false));
@@ -47,18 +66,32 @@ export default function UploadPage() {
           setMessage(`Supported files: ${ACCEPTED.join(", ")}`);
           continue;
         }
+        const isImage = /\.(png|jpe?g|webp)$/.test(name);
+        if (isImage) setMessage(`Reading "${file.name}" with the vision model…`);
         const result = await api.upload(file);
-        setMessage(
-          result.empty
-            ? `Uploaded "${result.title}" but found no readable text.`
-            : `Uploaded "${result.title}" — ${result.chunk_count} chunks stored. Writing a summary…`
-        );
+        setMessage(describeResult(result));
       }
       load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Upload failed");
     } finally {
       setUploading(false);
+    }
+  };
+
+  const importLink = async () => {
+    if (!url.trim()) return;
+    setImporting(true);
+    setMessage("Importing…");
+    try {
+      const result = await api.importUrl(url.trim());
+      setMessage(describeResult(result));
+      setUrl("");
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Import failed");
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -77,7 +110,7 @@ export default function UploadPage() {
     <div>
       <PageHeader
         title="Upload Materials"
-        description="Add PDF books, Word notes, PPTX slides, text files, or previous year papers. Scanned PDFs are read with OCR when Tesseract is installed."
+        description="Add PDF books, Word notes, slides, photos of handwritten notes, web articles or YouTube videos. Scanned pages and photos are read by your AI model's vision."
       />
 
       <motion.div
@@ -94,7 +127,7 @@ export default function UploadPage() {
       >
         <FileUp className="mb-4 h-12 w-12 text-violet-400" />
         <p className="mb-2 text-lg font-medium">Drag & drop files here</p>
-        <p className="mb-4 text-sm text-muted-foreground">PDF, DOCX, PPTX, TXT or MD · Max 25MB</p>
+        <p className="mb-4 text-sm text-muted-foreground">PDF, DOCX, PPTX, TXT, MD or images · Max 25MB</p>
         <label className="cursor-pointer">
           <input
             type="file"
@@ -109,6 +142,20 @@ export default function UploadPage() {
           </span>
         </label>
       </motion.div>
+
+      <div className="glass-card mb-8 flex flex-col gap-2 p-4 sm:flex-row sm:items-center">
+        <Link2 className="hidden h-5 w-5 shrink-0 text-violet-400 sm:block" />
+        <Input
+          placeholder="Paste a web article, YouTube video, or link to a PDF"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && importLink()}
+          disabled={importing}
+        />
+        <Button onClick={importLink} disabled={importing || !url.trim()}>
+          {importing ? "Importing…" : "Import link"}
+        </Button>
+      </div>
 
       <AnimatePresence>
         {message && (
@@ -151,11 +198,7 @@ export default function UploadPage() {
                     className="flex flex-1 items-center gap-4 px-6 py-4 text-left"
                     onClick={() => setExpanded(expanded === doc.id ? null : doc.id)}
                   >
-                    {doc.file_type === "pdf" ? (
-                      <FileText className="h-8 w-8 text-red-400" />
-                    ) : (
-                      <Presentation className="h-8 w-8 text-orange-400" />
-                    )}
+                    <DocIcon type={doc.file_type} />
                     <div>
                       <p className="font-medium">{doc.title || doc.filename}</p>
                       <p className="text-sm text-muted-foreground">

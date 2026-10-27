@@ -72,6 +72,17 @@ def test_article_extraction_drops_navigation():
     assert text == "Cells\n\nCells are the basic unit of life.\n\nNucleus holds DNA."
 
 
+def test_article_extraction_skips_references_and_cleans_title():
+    html = """<html><head><title>Photosynthesis - Wikipedia</title></head><body><main>
+    <p>Plants make sugar from light.<sup>[1]</sup></p>
+    <h2>External links</h2><ul><li>Biology textbook online</li></ul>
+    <div class="navbox"><ul><li>Biology portal</li></ul></div>
+    <ol class="references"><li>Smith, J. (2001). Plants.</li></ol></main></body></html>"""
+    title, text = extract_article(html)
+    assert title == "Photosynthesis"
+    assert text == "Plants make sugar from light."
+
+
 def test_import_youtube_url(client, monkeypatch):
     monkeypatch.setattr(importers, "_fetch_transcript", lambda vid: [(0, "Plants use light."), (125, "Chlorophyll is green.")])
 

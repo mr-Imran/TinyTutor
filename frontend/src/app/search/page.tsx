@@ -2,12 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { ExternalLink, FileText, Search } from "lucide-react";
+import { ExternalLink, FileText, Search, Sparkles } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, pdfPageUrl, SearchHit } from "@/lib/api";
+import { api, formatTimestamp, SearchHit, sourceLink } from "@/lib/api";
 
 /** Renders FTS snippet markers [[term]] as highlights. */
 function Snippet({ text }: { text: string }) {
@@ -55,7 +55,7 @@ export default function SearchPage() {
 
   return (
     <div>
-      <PageHeader title="Search" description="Find any idea across all your uploaded notes, slides and books." />
+      <PageHeader title="Search" description="Find any idea across all your materials — by exact words or by meaning." />
 
       <div className="relative mb-6">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -79,7 +79,7 @@ export default function SearchPage() {
       ) : (
         <div className="space-y-3">
           {results.map((hit, i) => {
-            const href = hit.file_type === "pdf" && hit.document_id ? pdfPageUrl(hit.document_id, hit.page_number) : null;
+            const href = sourceLink(hit);
             return (
               <motion.div key={hit.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.02 }}>
                 <Card>
@@ -88,7 +88,13 @@ export default function SearchPage() {
                       <span className="flex items-center gap-1">
                         <FileText className="h-3.5 w-3.5" />
                         {hit.source}
-                        {hit.page_number ? ` · page ${hit.page_number}` : ""} · {hit.topic}
+                        {hit.page_number ? ` · page ${hit.page_number}` : ""}
+                        {hit.start_seconds != null ? ` · ${formatTimestamp(hit.start_seconds)}` : ""} · {hit.topic}
+                        {hit.semantic_score != null && !hit.snippet.includes("[[") && (
+                          <span className="ml-2 inline-flex items-center gap-1 rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] text-violet-200">
+                            <Sparkles className="h-3 w-3" /> related meaning
+                          </span>
+                        )}
                       </span>
                       {href && (
                         <a href={href} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:text-foreground">
