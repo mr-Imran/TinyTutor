@@ -110,11 +110,17 @@ async def prepare_chat(
     user_id: int, kind: str, message: str, topic: str | None = None, history: list[dict] | None = None
 ) -> tuple[str, str, list[dict], list[dict]]:
     """Returns (prompt, system, history, sources) for a tutor or mentor turn."""
+    from services import grounding
+
     persona, label, limit = CHAT_PERSONAS[kind]
     chunks = await hybrid_search(user_id, message, topic=topic, limit=limit)
+    history = (history or [])[-HISTORY_MESSAGES:]
+    # Follow-ups ("and why?") lean on the conversation, so only the first question is gated.
+    if chunks and not history and grounding.settings()["enabled"] and not grounding.coverage(message, chunks)["covered"]:
+        return f"{label}: {message}", f"{persona} {grounding.NOT_COVERED_RULE}", history, []
     prompt = f"Study notes:\n{build_context(chunks)}\n\n{label}: {message}"
     system = f"{persona} {CITE_RULE}" if chunks else persona
-    return prompt, system, (history or [])[-HISTORY_MESSAGES:], source_refs(chunks)
+    return prompt, system, history, source_refs(chunks)
 
 
 async def chat_reply(
@@ -138,7 +144,9 @@ async def generate_quiz_question(
     system = (
         "Return ONLY valid JSON, no markdown. Schema: "
         '{"question":"...","options":["A","B","C","D"] or null for short answer,'
-        '"correct_answer":"...","explanation":"..."}'
+        '"correct_answer":"...","explanation":"..."}. '
+        "Write math in LaTeX between dollar signs, like $x^2$. For a math short answer, "
+        "make correct_answer just the value or expression, like 3/4 or 2x+1."
     )
     type_hint = {
         "mcq": "multiple choice with exactly 4 options",
@@ -165,7 +173,18 @@ async def evaluate_answer(
         is_correct = user_answer.strip().lower() == correct_answer.strip().lower()
         return {"is_correct": is_correct, "feedback": "Correct!" if is_correct else f"Correct answer: {correct_answer}"}
 
-    system = "Reply with JSON only: {\"is_correct\":true/false,\"feedback\":\"brief explanation\"}"
+    from services.math_check import equivalent
+
+    same = equivalent(user_answer, correct_answer)
+    if same is not None:  # both are math: algebra decides, no AI needed
+        return {
+            "is_correct": same,
+            "feedback": "Correct! Your answer is equivalent to the expected one (checked with algebra)." if same
+            else f"Not equivalent to the expected answer ({correct_answer}), checked with algebra.",
+            "checked_by": "algebra",
+        }
+
+    system ="Reply with JSON only: {\"is_correct\":true/false,\"feedback\":\"brief explanation\"}"
     prompt = (
         f"Question: {question}\nExpected: {correct_answer}\nStudent: {user_answer}\n"
         "Grade generously if meaning matches."

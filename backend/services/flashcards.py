@@ -43,12 +43,22 @@ def _now() -> datetime:
     return datetime.utcnow()
 
 
+def card_out(card: dict | None) -> dict | None:
+    """Row -> API shape: occlusion boxes are parsed, the raw JSON column dropped."""
+    if card is None:
+        return None
+    card["masks"] = json.loads(card.pop("masks_json", None) or "null")
+    return card
+
+
 def create_cards(user_id: int, topic: str, cards: list[dict], document_id: int | None = None) -> list[dict]:
     now = _now().isoformat()
     with get_db() as conn:
         existing = {
             r["front"].strip().lower()
-            for r in conn.execute("SELECT front FROM flashcards WHERE user_id = ? AND topic = ?", (user_id, topic))
+            for r in conn.execute(
+                "SELECT front FROM flashcards WHERE user_id = ? AND topic = ? AND card_type = 'basic'", (user_id, topic)
+            )
         }
         ids = []
         for c in cards:
@@ -67,7 +77,7 @@ def create_cards(user_id: int, topic: str, cards: list[dict], document_id: int |
         rows = conn.execute(
             f"SELECT * FROM flashcards WHERE id IN ({','.join('?' * len(ids))}) ORDER BY id", ids
         ).fetchall()
-    return [row_to_dict(r) for r in rows]
+    return [card_out(row_to_dict(r)) for r in rows]
 
 
 def _document_chunks(user_id: int, document_id: int, limit: int) -> tuple[str, list[dict]]:
@@ -182,7 +192,7 @@ def due_cards(user_id: int, limit: int = 20, topic: str | None = None) -> list[d
     sql += " ORDER BY due_at LIMIT ?"
     params.append(limit)
     with get_db() as conn:
-        return [row_to_dict(r) for r in conn.execute(sql, params).fetchall()]
+        return [card_out(row_to_dict(r)) for r in conn.execute(sql, params).fetchall()]
 
 
 def list_cards(user_id: int, topic: str | None = None) -> list[dict]:
@@ -192,7 +202,7 @@ def list_cards(user_id: int, topic: str | None = None) -> list[dict]:
         sql += " AND topic = ?"
         params.append(topic)
     with get_db() as conn:
-        return [row_to_dict(r) for r in conn.execute(sql + " ORDER BY topic, id", params).fetchall()]
+        return [card_out(row_to_dict(r)) for r in conn.execute(sql + " ORDER BY topic, id", params).fetchall()]
 
 
 def review_card(user_id: int, card_id: int, grade: int) -> dict | None:
@@ -214,7 +224,7 @@ def review_card(user_id: int, card_id: int, grade: int) -> dict | None:
     record_event(user_id, card["topic"], grade >= 3, "easy", source="flashcard")
     touch_study_streak(user_id)
     with get_db() as conn:
-        return row_to_dict(conn.execute("SELECT * FROM flashcards WHERE id = ?", (card_id,)).fetchone())
+        return card_out(row_to_dict(conn.execute("SELECT * FROM flashcards WHERE id = ?", (card_id,)).fetchone()))
 
 
 def flashcard_stats(user_id: int) -> dict:
@@ -244,5 +254,12 @@ def update_card(user_id: int, card_id: int, front: str | None, back: str | None)
 
 
 def delete_card(user_id: int, card_id: int):
+    from services.card_types import remove_unused_image
+
     with get_db() as conn:
+        row = conn.execute(
+            "SELECT image_name FROM flashcards WHERE id = ? AND user_id = ?", (card_id, user_id)
+        ).fetchone()
         conn.execute("DELETE FROM flashcards WHERE id = ? AND user_id = ?", (card_id, user_id))
+    if row:
+        remove_unused_image(row["image_name"])

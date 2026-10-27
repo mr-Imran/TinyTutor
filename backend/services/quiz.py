@@ -16,10 +16,10 @@ def record_quiz_attempt(
     user_answer: str,
     is_correct: bool,
     source: str = "quiz",
-):
+) -> int:
     now = datetime.utcnow().isoformat()
     with get_db() as conn:
-        conn.execute(
+        cur = conn.execute(
             """INSERT INTO quiz_attempts
                (user_id, topic, question_type, difficulty, question, options_json,
                 correct_answer, user_answer, is_correct, score, created_at)
@@ -40,6 +40,7 @@ def record_quiz_attempt(
         )
     record_event(user_id, topic, is_correct, difficulty, source=source)
     touch_study_streak(user_id)
+    return cur.lastrowid
 
 
 def touch_study_streak(user_id: int):

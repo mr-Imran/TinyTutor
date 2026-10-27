@@ -94,6 +94,19 @@ def build_tasks(user_id: int, today: date) -> list[dict]:
             "detail": "Five questions to check what stuck.", "minutes": 10, "link": "/quiz", "done": False,
         })
 
+    with get_db() as conn:
+        misconception = conn.execute(
+            """SELECT id, title FROM misconceptions WHERE user_id = ? AND status = 'open'
+               ORDER BY updated_at DESC LIMIT 1""",
+            (user_id,),
+        ).fetchone()
+    if misconception:
+        tasks.append({
+            "id": f"fix:{misconception['id']}", "kind": "misconception", "title": f"Fix a mistake: {misconception['title']}",
+            "detail": "Read the correction, then answer the targeted drill.",
+            "minutes": 10, "link": "/misconceptions", "done": False,
+        })
+
     days_to_exam = targets.get("days_until_exam_start")
     exam_soon = targets.get("has_plan") and (
         targets.get("in_exam_window") or (days_to_exam is not None and days_to_exam <= MOCK_EXAM_LEAD_DAYS)

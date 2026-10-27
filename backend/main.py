@@ -13,20 +13,29 @@ from routers import (
     documents,
     exam_tools,
     flashcards,
+    grading,
+    knowledge,
+    math,
+    misconceptions,
     mock_exams,
+    notes,
     plan,
     progress,
     quiz,
     search,
     settings,
     study,
+    usage,
 )
 from services.scheduler import start_scheduler
+from services.transcription import mark_interrupted
+from services.usage import FeatureMiddleware
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    mark_interrupted()
     start_scheduler()
     yield
 
@@ -42,6 +51,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["X-Session-Id", "X-Sources"],
 )
+app.add_middleware(FeatureMiddleware)
 
 app.include_router(documents.router)
 app.include_router(chat.router)
@@ -57,6 +67,12 @@ app.include_router(mock_exams.router)
 app.include_router(plan.router)
 app.include_router(progress.router)
 app.include_router(data.router)
+app.include_router(grading.router)
+app.include_router(misconceptions.router)
+app.include_router(knowledge.router)
+app.include_router(notes.router)
+app.include_router(usage.router)
+app.include_router(math.router)
 
 
 @app.get("/api/health")

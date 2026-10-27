@@ -25,6 +25,11 @@ ALLOWED_TABLES = [
     "mastery_events",
     "daily_plans",
     "badges",
+    "graded_answers",
+    "misconceptions",
+    "concepts",
+    "concept_links",
+    "llm_usage",
 ]
 
 MANUAL_FILENAME = "__manual_context__"

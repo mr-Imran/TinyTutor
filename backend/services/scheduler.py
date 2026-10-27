@@ -14,6 +14,9 @@ _scheduler: BackgroundScheduler | None = None
 
 def _run_async(coro):
     # APScheduler jobs run in a worker thread with no event loop of its own.
+    from services.usage import current_feature
+
+    current_feature.set("scheduler")
     return asyncio.run(coro)
 
 

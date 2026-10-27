@@ -1,11 +1,16 @@
-from fastapi import APIRouter, HTTPException
+import json
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from services import flashcards
+from services import card_types, flashcards
+from services.document_processor import IMAGE_TYPES
 
 router = APIRouter(prefix="/api/flashcards", tags=["flashcards"])
 
 USER_ID = 1
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 
 class GenerateBody(BaseModel):
@@ -64,6 +69,56 @@ async def from_highlights(body: FromHighlightsBody):
         return await flashcards.cards_from_highlights(USER_ID, body.document_id, body.marker_ids)
     except ValueError as e:
         raise HTTPException(404, str(e))
+
+
+class ClozeBody(BaseModel):
+    topic: str = Field(min_length=1, max_length=120)
+    text: str = Field(min_length=5, max_length=4000)
+    extra: str = Field(default="", max_length=4000)
+
+
+class SuggestBody(BaseModel):
+    text: str = Field(min_length=5, max_length=4000)
+
+
+@router.post("/cloze")
+def create_cloze(body: ClozeBody):
+    try:
+        return card_types.create_cloze(USER_ID, body.topic, body.text, body.extra)
+    except card_types.CardError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/cloze/suggest")
+async def suggest_cloze(body: SuggestBody):
+    return await card_types.suggest_cloze(body.text)
+
+
+@router.post("/occlusion")
+async def create_occlusion(
+    file: UploadFile = File(...),
+    topic: str = Form(...),
+    masks: str = Form(...),
+    header: str = Form(""),
+):
+    ext = "." + (file.filename or "").rsplit(".", 1)[-1].lower()
+    if ext not in IMAGE_TYPES:
+        raise HTTPException(400, f"Upload an image ({', '.join(IMAGE_TYPES)})")
+    data = await file.read()
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(400, "Image too large (max 10MB)")
+    try:
+        return card_types.create_occlusion(USER_ID, topic, data, ext, json.loads(masks), header)
+    except (card_types.CardError, json.JSONDecodeError) as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/images/{name}")
+def card_image(name: str):
+    path = card_types.image_path(name)
+    if not path:
+        raise HTTPException(404, "Image not found")
+    return FileResponse(path)
 
 
 @router.post("")

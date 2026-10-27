@@ -47,7 +47,8 @@ def xp_by_day(user_id: int) -> dict[str, int]:
                 days[_day(r["created_at"])] += XP_FLASHCARD
             else:
                 days[_day(r["created_at"])] += XP_CORRECT if r["is_correct"] else XP_WRONG
-        for r in conn.execute("SELECT created_at FROM documents WHERE user_id = ?", (user_id,)):
+        # Notes written in the app are not uploads: saving an empty note should not earn XP.
+        for r in conn.execute("SELECT created_at FROM documents WHERE user_id = ? AND file_type != 'note'", (user_id,)):
             days[_day(r["created_at"])] += XP_UPLOAD
         for r in conn.execute(
             "SELECT submitted_at, score, total FROM mock_exams WHERE user_id = ? AND status = 'submitted'", (user_id,)
@@ -78,7 +79,7 @@ def gather_stats(user_id: int) -> dict:
     with get_db() as conn:
         one = lambda sql: conn.execute(sql, (user_id,)).fetchone()[0] or 0  # noqa: E731
         stats = {
-            "documents": one("SELECT COUNT(*) FROM documents WHERE user_id = ?"),
+            "documents": one("SELECT COUNT(*) FROM documents WHERE user_id = ? AND file_type != 'note'"),
             "answers": one("SELECT COUNT(*) FROM mastery_events WHERE user_id = ? AND source != 'flashcard'"),
             "reviews": one("SELECT COUNT(*) FROM mastery_events WHERE user_id = ? AND source = 'flashcard'"),
             "mock_exams": one("SELECT COUNT(*) FROM mock_exams WHERE user_id = ? AND status = 'submitted'"),

@@ -15,6 +15,7 @@ from pathlib import Path
 import database
 from config import UPLOAD_DIR
 from database import get_db
+from services.card_types import CLOZE_RE, create_cloze, render_cloze, render_occlusion_png
 from services.flashcards import create_cards
 
 BACKUP_FORMAT = 1
@@ -119,7 +120,13 @@ def flashcards_csv(user_id: int, topic: str | None = None) -> str:
     writer = csv.writer(out)
     writer.writerow(["topic", "front", "back", "interval_days", "repetitions", "due_at"])
     for c in _cards(user_id, topic):
-        writer.writerow([c["topic"], c["front"], c["back"], c["interval_days"], c["repetitions"], c["due_at"]])
+        if c["card_type"] == "occlusion":
+            continue  # image cards need the .apkg export
+        front, back = c["front"], c["back"]
+        if c["card_type"] == "cloze":
+            front = render_cloze(c["front"], c["cloze_index"], reveal=False)
+            back = render_cloze(c["front"], c["cloze_index"], reveal=True) + (f"\n{c['back']}" if c["back"] else "")
+        writer.writerow([c["topic"], front, back, c["interval_days"], c["repetitions"], c["due_at"]])
     return out.getvalue()
 
 
@@ -198,20 +205,54 @@ def flashcards_apkg(user_id: int, topic: str | None = None) -> bytes:
         }],
     )
     decks: dict[str, genanki.Deck] = {}
-    for c in _cards(user_id, topic):
-        name = f"TinyTutor::{c['topic']}"
+    cloze_notes: set[str] = set()
+
+    def deck_for(card):
+        name = f"TinyTutor::{card['topic']}"
         if name not in decks:
             decks[name] = genanki.Deck(ANKI_DECK_BASE_ID + len(decks), name)
-        decks[name].add_note(genanki.Note(
-            model=model,
-            fields=[_html_escape(c["front"]), _html_escape(c["back"])],
-            guid=genanki.guid_for("tinytutor", c["id"]),
-        ))
-    if not decks:
-        raise DataError("There are no flashcards to export.")
+        return decks[name]
+
     with tempfile.TemporaryDirectory() as tmp:
+        media = []
+        for c in _cards(user_id, topic):
+            if c["card_type"] == "cloze":
+                # Siblings share one note; Anki makes a card per {{cN::}} itself.
+                if c["note_id"] in cloze_notes:
+                    continue
+                cloze_notes.add(c["note_id"])
+                deck_for(c).add_note(genanki.Note(
+                    model=genanki.CLOZE_MODEL,
+                    fields=[_html_escape(c["front"]), _html_escape(c["back"])],
+                    guid=genanki.guid_for("tinytutor", c["note_id"]),
+                ))
+            elif c["card_type"] == "occlusion":
+                # Exported as picture cards with the box burned in, which every Anki version can show.
+                masks = json.loads(c["masks_json"] or "[]")
+                if not (UPLOAD_DIR / (c["image_name"] or "")).is_file() or c["cloze_index"] >= len(masks):
+                    continue
+                q, a = f"tinytutor_{c['id']}_q.png", f"tinytutor_{c['id']}_a.png"
+                (Path(tmp) / q).write_bytes(render_occlusion_png(c["image_name"], masks, c["cloze_index"], False))
+                (Path(tmp) / a).write_bytes(render_occlusion_png(c["image_name"], masks, c["cloze_index"], True))
+                media += [str(Path(tmp) / q), str(Path(tmp) / a)]
+                deck_for(c).add_note(genanki.Note(
+                    model=model,
+                    fields=[f'{_html_escape(c["front"])}<br><img src="{q}">',
+                            f'<img src="{a}"><br>{_html_escape(c["back"])}'],
+                    guid=genanki.guid_for("tinytutor", c["id"]),
+                ))
+            else:
+                deck_for(c).add_note(genanki.Note(
+                    model=model,
+                    fields=[_html_escape(c["front"]), _html_escape(c["back"])],
+                    guid=genanki.guid_for("tinytutor", c["id"]),
+                ))
+        if not decks:
+            raise DataError("There are no flashcards to export.")
         path = Path(tmp) / "tinytutor.apkg"
-        genanki.Package(list(decks.values())).write_to_file(path)
+        package = genanki.Package(list(decks.values()))
+        package.media_files = media
+        package.write_to_file(path)
         return path.read_bytes()
 
 
@@ -251,11 +292,18 @@ def import_flashcards_apkg(user_id: int, data: bytes, default_topic: str) -> dic
             conn.close()
 
     by_topic: dict[str, list[dict]] = {}
+    cloze_created = 0
     for flds, did in notes:
         fields = flds.split("\x1f")
-        if len(fields) < 2:
-            continue
         deck = deck_names.get(did or 0, "")
         topic = deck.split("::")[-1].strip() if deck and deck != "Default" else default_topic
+        if CLOZE_RE.search(fields[0]):
+            extra = _strip_html(fields[1]) if len(fields) > 1 else ""
+            cloze_created += 1 if create_cloze(user_id, topic, _strip_html(fields[0]), extra) else 0
+            continue
+        if len(fields) < 2:
+            continue
         by_topic.setdefault(topic, []).append({"front": _strip_html(fields[0]), "back": _strip_html(fields[1])})
-    return _create_by_topic(user_id, by_topic, total=len(notes))
+    result = _create_by_topic(user_id, by_topic, total=len(notes) - cloze_created)
+    result["imported"] += cloze_created
+    return result
