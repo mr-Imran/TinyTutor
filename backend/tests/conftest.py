@@ -17,8 +17,56 @@ class FakeLLM:
         self.calls: list[dict] = []
         self.stream_text = "Photosynthesis makes sugar from light [1]."
         self.grade_correct = True
+        self.tool_script: list[tuple[str, list]] = [("A plain answer.", [])]
+        self.tools_supported = True
 
     def reply_for(self, system: str, messages: list[dict]) -> str:
+        prompt = messages[-1]["content"]
+        if "marking rubrics" in system:
+            return json.dumps({"criteria": [
+                {"name": "Definition", "description": "Defines photosynthesis", "points": 2},
+                {"name": "Inputs", "description": "Names light, water and CO2", "points": 3},
+            ]})
+        if "fair, encouraging examiner" in system:
+            return json.dumps({
+                "criteria": [
+                    {"name": "Definition", "score": 2, "max": 2, "feedback": "Clear.", "evidence": [1]},
+                    {"name": "Inputs", "score": 9, "max": 3, "feedback": "Over-scored on purpose.", "evidence": []},
+                ],
+                "overall_feedback": "Good answer.", "model_answer": "Plants turn light into sugar.",
+            })
+        if "Feynman" in system:
+            return json.dumps({"score": 82, "accuracy": 90, "clarity": 75, "completeness": 80,
+                               "gaps": ["Mention chlorophyll"], "jargon": [{"term": "ATP", "suggestion": "energy packet"}],
+                               "misconceptions": [], "follow_up_question": "Why are leaves green?",
+                               "verdict": "Nice and clear."})
+        if "misconception behind" in system:
+            return json.dumps({"is_pattern": True, "same_as": None, "title": "Confuses mitosis with meiosis",
+                               "description": "Thinks mitosis makes gametes.", "correction": "Meiosis makes gametes."})
+        if "target one specific misconception" in system:
+            return json.dumps({"questions": [
+                {"question": f"Drill {i}?", "options": ["Mitosis", "Meiosis"], "correct_answer": "Meiosis",
+                 "explanation": "Gametes come from meiosis."} for i in range(1, 4)
+            ]})
+        if "order study concepts" in system:
+            return json.dumps({"prerequisites": [{"before": "Stomata", "after": "Photosynthesis"},
+                                                 {"before": "Nonexistent", "after": "Photosynthesis"}]})
+        if "fill-in-the-blank flashcard" in system:
+            return json.dumps({"text": prompt.replace("mitochondria", "{{c1::mitochondria}}")})
+        if "solve math problems" in system:
+            return json.dumps({"steps": [
+                {"explanation": "Start", "expression": "2x + 3 = 7"},
+                {"explanation": "Subtract 3", "expression": "2x = 4"},
+                {"explanation": "Divide by 2", "expression": "x = 3"},
+            ], "final_answer": "x = 3"})
+        if "check whether statements" in system:
+            return json.dumps({"results": [{"n": 1, "supported": True}]})
+        if "highlighted passages" in system:
+            count = messages[-1]["content"].count("\n\n[") + 1
+            return json.dumps({"cards": [
+                {"n": i, "front": f"Highlight question {i}?", "back": f"Highlight answer {i}."}
+                for i in range(1, count + 1)
+            ]})
         if "flashcards" in system:
             return json.dumps({"cards": [
                 {"front": "What is ATP?", "back": "The cell's energy currency."},
@@ -47,9 +95,19 @@ class FakeLLM:
                                "correct_answer": "Sugar", "explanation": "Glucose."})
         return "A plain answer."
 
-    async def complete(self, messages, system="", json_mode=False, cfg=None):
+    async def complete(self, messages, system="", json_mode=False, cfg=None, temperature=None):
         self.calls.append({"messages": messages, "system": system, "json_mode": json_mode})
         return self.reply_for(system, messages)
+
+    async def complete_with_tools(self, messages, system, tools, cfg=None, allow_calls=True):
+        """Plays self.tool_script: each entry is (text, [(tool_name, args), ...])."""
+        self.calls.append({"messages": list(messages), "system": system, "tools": [t["name"] for t in tools],
+                           "allow_calls": allow_calls})
+        step = sum(1 for m in messages if m["role"] == "assistant" and m.get("tool_calls") is not None)
+        text, calls = self.tool_script[min(step, len(self.tool_script) - 1)] if allow_calls else ("Out of steps.", [])
+        calls = [{"id": f"t{step}_{i}", "name": n, "args": a} for i, (n, a) in enumerate(calls)]
+        return {"text": text, "tool_calls": calls,
+                "assistant": {"role": "assistant", "content": text, "tool_calls": calls, "raw": None}}
 
     async def stream(self, messages, system="", cfg=None):
         self.calls.append({"messages": messages, "system": system, "stream": True})
@@ -62,7 +120,56 @@ def fake_llm(monkeypatch):
     fake = FakeLLM()
     monkeypatch.setattr(llm, "complete", fake.complete)
     monkeypatch.setattr(llm, "stream", fake.stream)
+    monkeypatch.setattr(llm, "complete_with_tools", fake.complete_with_tools)
+
+    async def supports_tools(cfg=None):
+        return fake.tools_supported
+
+    monkeypatch.setattr(llm, "supports_tools", supports_tools)
+
+    async def describe_image(image, mime, prompt=llm.VISION_PROMPT, cfg=None):
+        fake.calls.append({"vision": mime})
+        return "Handwritten note: the mitochondria is the powerhouse of the cell."
+
+    monkeypatch.setattr(llm, "describe_image", describe_image)
     return fake
+
+
+# Words in the same group get the same embedding direction, so "car" matches "automobile"
+# by meaning even though the words differ.
+SYNONYMS = [
+    {"car", "cars", "automobile", "vehicle", "engine"},
+    {"plant", "plants", "photosynthesis", "chlorophyll", "leaf"},
+    {"heart", "cardiac", "blood", "pulse"},
+]
+
+
+def fake_vector(text: str, dim: int = 16) -> list[float]:
+    import re
+    import zlib
+
+    vec = [0.0] * dim
+    for word in re.findall(r"\w+", text.lower()):
+        group = next((i for i, g in enumerate(SYNONYMS) if word in g), None)
+        if group is not None:
+            vec[group] += 1.0
+        else:
+            vec[3 + zlib.crc32(word.encode()) % (dim - 3)] += 0.2  # stable across runs, unlike hash()
+    return vec
+
+
+@pytest.fixture(autouse=True)
+def fake_embeddings(monkeypatch):
+    from services import embeddings
+
+    calls = []
+
+    async def embed(texts, cfg=None):
+        calls.append(len(texts))
+        return [fake_vector(t) for t in texts]
+
+    monkeypatch.setattr(embeddings, "embed_texts", embed)
+    return calls
 
 
 @pytest.fixture
@@ -73,9 +180,13 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "DB_PATH", data_dir / "tutor.db")
     import routers.documents
     import routers.exam_tools
+    import services.card_types
+    import services.data_transfer
     import services.document_processor
+    import services.transcription
 
-    for mod in (services.document_processor, routers.documents, routers.exam_tools):
+    for mod in (services.document_processor, services.data_transfer, routers.documents, routers.exam_tools,
+                services.card_types, services.transcription):
         monkeypatch.setattr(mod, "UPLOAD_DIR", uploads)
     for var in ("LLM_PROVIDER", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_BASE_URL"):
         monkeypatch.delenv(var, raising=False)

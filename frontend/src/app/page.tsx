@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { FileText, Flame, Layers, Target, Trophy, Zap } from "lucide-react";
+import { FileText, Flame, Target, Trophy, Zap } from "lucide-react";
 import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
+import { ProgressPanel } from "@/components/ProgressPanel";
+import { TodayPlan } from "@/components/TodayPlan";
 import { StatCard } from "@/components/StatCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +18,7 @@ export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [notifications, setNotifications] = useState<ScheduledQuestion[]>([]);
   const [loading, setLoading] = useState(true);
+  const [progressKey, setProgressKey] = useState(0);
 
   useEffect(() => {
     Promise.all([api.dashboard(), api.notifications()])
@@ -62,21 +65,8 @@ export default function DashboardPage() {
         />
       </div>
 
-      {d.flashcards && d.flashcards.due > 0 && (
-        <Link href="/flashcards">
-          <motion.div
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="glass-card mb-8 flex items-center justify-between gap-4 px-5 py-4 hover:bg-white/10"
-          >
-            <span className="flex items-center gap-3 text-sm">
-              <Layers className="h-5 w-5 text-violet-400" />
-              {d.flashcards.due} flashcard{d.flashcards.due === 1 ? " is" : "s are"} due for review
-            </span>
-            <span className="text-xs text-muted-foreground">Review now →</span>
-          </motion.div>
-        </Link>
-      )}
+      <ProgressPanel refreshKey={progressKey} />
+      <TodayPlan onChange={() => setProgressKey((k) => k + 1)} />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>

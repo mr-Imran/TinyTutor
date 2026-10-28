@@ -66,4 +66,4 @@ async def mentor_chat_endpoint(body: ChatRequest):
 
 @router.post("/mentor/stream")
 async def mentor_stream(body: ChatRequest):
-    return stream_chat("mentor", body)
+    return await stream_chat("mentor", body)

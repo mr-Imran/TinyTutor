@@ -2,12 +2,12 @@ import io
 
 from docx import Document as DocxDocument
 
-from services.document_processor import chunk_segments
+from services.document_processor import Segment, chunk_segments
 
 
 def test_chunks_keep_paragraphs_and_pages():
     para = "Sentence one is here. " * 10  # ~220 chars
-    segments = [(1, f"{para}\n\n{para}\n\n{para}"), (2, "Short page two.")]
+    segments = [Segment(f"{para}\n\n{para}\n\n{para}", page_number=1), Segment("Short page two.", page_number=2)]
     chunks = chunk_segments(segments, "Doc", "Topic", "doc.pdf")
     assert chunks[-1]["page_number"] == 2
     assert all(len(c["content"]) <= 700 for c in chunks)
@@ -17,7 +17,7 @@ def test_chunks_keep_paragraphs_and_pages():
 
 def test_long_paragraph_is_split():
     text = "word " * 500
-    chunks = chunk_segments([(None, text)], "Doc", "T", "s")
+    chunks = chunk_segments([Segment(text)], "Doc", "T", "s")
     assert len(chunks) > 3
     assert all(c["page_number"] is None for c in chunks)
 

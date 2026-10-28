@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/TextLayer.css";
 import "react-pdf/dist/Page/AnnotationLayer.css";
-import { Highlighter, ChevronLeft, ChevronRight, Save, Trash2, Sparkles } from "lucide-react";
+import { Highlighter, ChevronLeft, ChevronRight, Layers, Save, Trash2, Sparkles } from "lucide-react";
 import { HumanText } from "@/components/HumanText";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -104,6 +104,27 @@ export function PdfReader() {
       setSaveTitle("");
     } finally {
       setSavingDoc(false);
+    }
+  };
+
+  const [cardsMessage, setCardsMessage] = useState("");
+  const [makingCards, setMakingCards] = useState(false);
+
+  const cardsFromHighlights = async () => {
+    if (!docId) return;
+    setMakingCards(true);
+    setCardsMessage("");
+    try {
+      const r = await api.flashcardsFromHighlights(docId);
+      setCardsMessage(
+        r.created.length
+          ? `Made ${r.created.length} flashcard${r.created.length === 1 ? "" : "s"}${r.used_ai ? "" : " (AI offline, so cards quote your highlights)"}. Review them on the Flashcards page.`
+          : "Every highlight already has a flashcard."
+      );
+    } catch (e) {
+      setCardsMessage(e instanceof Error ? e.message : "Could not make flashcards");
+    } finally {
+      setMakingCards(false);
     }
   };
 
@@ -258,7 +279,14 @@ export function PdfReader() {
       {markers.length > 0 && (
         <Card>
           <CardContent className="space-y-2 pt-4">
-            <p className="text-sm font-medium">Saved markers</p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-medium">Saved markers</p>
+              <Button variant="outline" size="sm" onClick={cardsFromHighlights} disabled={makingCards}>
+                <Layers className="h-3.5 w-3.5" />
+                {makingCards ? "Making flashcards…" : "Turn highlights into flashcards"}
+              </Button>
+            </div>
+            {cardsMessage && <p className="text-xs text-cyan-400">{cardsMessage}</p>}
             {markers.map((m) => (
               <div key={m.id} className="flex items-start justify-between gap-3 rounded-lg bg-white/5 p-3">
                 <div>

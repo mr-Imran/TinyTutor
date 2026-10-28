@@ -2,17 +2,31 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Send, Bot, User, Plus, MessageSquare, Trash2 } from "lucide-react";
+import { Send, Bot, User, Plus, MessageSquare, Trash2, Mic, Square, Volume2, VolumeX, Wand2, Wrench } from "lucide-react";
+import { AgentCardView } from "@/components/AgentCards";
 import { CitedText } from "@/components/CitedText";
+import { GroundingBadge } from "@/components/GroundingBadge";
 import { HumanText } from "@/components/HumanText";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, ChatSession, ChatSource, streamChat } from "@/lib/api";
+import { AgentCard, api, ChatSession, ChatSource, Grounding, streamAgent, streamChat } from "@/lib/api";
+import { canSpeak, speak, stopSpeaking, useSpeechRecognition } from "@/lib/speech";
 
-type Message = { role: "user" | "assistant"; content: string; sources?: ChatSource[] };
+type Message = {
+  role: "user" | "assistant";
+  content: string;
+  sources?: ChatSource[];
+  cards?: AgentCard[];
+  tools?: string[];
+  notice?: string;
+  grounding?: Grounding | null;
+  checking?: boolean;
+};
+
+const AGENT_KEY = "tinytutor.agentMode";
 
 const GREETING: Message = {
   role: "assistant",
@@ -27,6 +41,11 @@ export default function TutorPage() {
   const [loading, setLoading] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionId, setSessionId] = useState<number | null>(null);
+  const [readAloud, setReadAloud] = useState(false);
+  const [ttsAvailable, setTtsAvailable] = useState(false);
+  const [agentMode, setAgentMode] = useState(false);
+  const [agentSupported, setAgentSupported] = useState<boolean | null>(null);
+  const [groundingOn, setGroundingOn] = useState(true);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -36,8 +55,26 @@ export default function TutorPage() {
 
   useEffect(() => {
     api.topics().then((r) => setTopics(r.topics)).catch(() => {});
+    api.agentStatus().then((s) => setAgentSupported(s.supported)).catch(() => setAgentSupported(null));
+    api.groundingSettings().then((g) => setGroundingOn(g.enabled)).catch(() => {});
+    try {
+      setAgentMode(localStorage.getItem(AGENT_KEY) === "1");
+    } catch {
+      // storage unavailable: agent mode just starts off
+    }
     loadSessions();
   }, [loadSessions]);
+
+  const toggleAgent = () => {
+    setAgentMode((on) => {
+      try {
+        localStorage.setItem(AGENT_KEY, on ? "0" : "1");
+      } catch {
+        // not remembered, still works for this visit
+      }
+      return !on;
+    });
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -47,13 +84,27 @@ export default function TutorPage() {
     return () => abortRef.current?.abort();
   }, []);
 
+  // Speaking a question sends it as soon as the speaker pauses.
+  const voice = useSpeechRecognition((text) => send(text));
+
+  useEffect(() => {
+    setTtsAvailable(canSpeak());
+    return stopSpeaking;
+  }, []);
+
   const openSession = async (id: number) => {
     if (loading) return;
     const detail = await api.chatSession(id);
     setSessionId(id);
     setMessages(
       detail.messages.length
-        ? detail.messages.map((m) => ({ role: m.role, content: m.content, sources: m.sources }))
+        ? detail.messages.map((m) => ({
+            role: m.role,
+            content: m.content,
+            sources: m.sources,
+            cards: m.cards,
+            grounding: m.grounding,
+          }))
         : [GREETING]
     );
   };
@@ -70,33 +121,81 @@ export default function TutorPage() {
     loadSessions();
   };
 
-  const send = async () => {
-    if (!input.trim() || loading) return;
-    const userMsg = input.trim();
+  const send = async (spoken?: string) => {
+    const userMsg = (spoken ?? input).trim();
+    if (!userMsg || loading) return;
     setInput("");
     setMessages((m) => [...m, { role: "user", content: userMsg }, { role: "assistant", content: "" }]);
     setLoading(true);
 
-    const setLast = (msg: Message) =>
+    const setLast = (update: (msg: Message) => Message) =>
       setMessages((m) => {
         const copy = [...m];
-        copy[copy.length - 1] = msg;
+        copy[copy.length - 1] = update(copy[copy.length - 1]);
         return copy;
       });
+
+    // After the answer: check it against the notes it cited (agent turns without notes are skipped).
+    const check = async (sid: number | null, sources: ChatSource[], failed: boolean) => {
+      if (!groundingOn || !sid || failed || (agentMode && !sources.length)) return;
+      setLast((m) => ({ ...m, checking: true }));
+      const grounding = await api.checkAnswer(sid).catch(() => null);
+      setLast((m) => ({ ...m, checking: false, grounding }));
+    };
 
     try {
       const controller = new AbortController();
       abortRef.current = controller;
-      const result = await streamChat(
-        "tutor",
-        { message: userMsg, topic: topic || undefined, session_id: sessionId },
-        (full, meta) => setLast({ role: "assistant", content: full, sources: meta.sources }),
-        controller.signal
-      );
-      if (result.sessionId && result.sessionId !== sessionId) setSessionId(result.sessionId);
+      const body = { message: userMsg, topic: topic || undefined, session_id: sessionId };
+      let finalText = "";
+      let sid: number | null;
+      let sources: ChatSource[] = [];
+      let failed = false;
+      if (agentMode) {
+        sid = await streamAgent(
+          body,
+          (event) => {
+            if (event.type === "tool") setLast((m) => ({ ...m, tools: [...(m.tools ?? []), event.label] }));
+            else if (event.type === "card") setLast((m) => ({ ...m, cards: [...(m.cards ?? []), event.card] }));
+            else if (event.type === "notice") setLast((m) => ({ ...m, notice: event.message }));
+            else if (event.type === "delta") {
+              finalText += event.text;
+              const text = finalText;
+              setLast((m) => ({ ...m, content: text }));
+            } else if (event.type === "text") {
+              finalText = event.text;
+              setLast((m) => ({ ...m, content: event.text }));
+            } else if (event.type === "error") {
+              failed = true;
+              setLast((m) => ({ ...m, content: event.message }));
+            } else if (event.type === "done") {
+              sources = event.sources;
+              setLast((m) => ({ ...m, sources: event.sources }));
+            }
+          },
+          controller.signal
+        );
+      } else {
+        const result = await streamChat(
+          "tutor",
+          body,
+          (full, meta) => setLast((m) => ({ ...m, content: full, sources: meta.sources })),
+          controller.signal
+        );
+        sid = result.sessionId;
+        finalText = result.text;
+        sources = result.sources;
+        failed = finalText.startsWith("Sorry, the AI is offline");
+      }
+      if (sid && sid !== sessionId) setSessionId(sid);
+      if (readAloud && finalText) speak(finalText);
       loadSessions();
+      await check(sid, sources, failed);
     } catch {
-      setLast({ role: "assistant", content: "Could not reach the AI. Is the backend running and an AI provider set up in Settings?" });
+      setLast(() => ({
+        role: "assistant",
+        content: "Could not reach the AI. Is the backend running and an AI provider set up in Settings?",
+      }));
     } finally {
       abortRef.current = null;
       setLoading(false);
@@ -179,7 +278,24 @@ export default function TutorPage() {
                   }`}
                 >
                   {msg.role === "assistant" ? (
-                    <CitedText text={msg.content} sources={msg.sources} />
+                    <>
+                      {msg.notice && <p className="mb-2 text-xs text-amber-300">{msg.notice}</p>}
+                      {msg.tools && msg.tools.length > 0 && (
+                        <div className="mb-2 flex flex-wrap gap-1">
+                          {msg.tools.map((t, j) => (
+                            <span
+                              key={j}
+                              className="inline-flex items-center gap-1 rounded-full bg-violet-500/15 px-2 py-0.5 text-[11px] text-violet-200"
+                            >
+                              <Wrench className="h-3 w-3" /> {t}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {msg.content ? <CitedText text={msg.content} sources={msg.sources} /> : null}
+                      {msg.cards?.map((c, j) => <AgentCardView key={j} card={c} />)}
+                      <GroundingBadge grounding={msg.grounding} checking={msg.checking} />
+                    </>
                   ) : (
                     <HumanText text={msg.content} />
                   )}
@@ -197,12 +313,63 @@ export default function TutorPage() {
 
           <div className="flex gap-2 border-t border-white/10 p-4">
             <Input
-              placeholder={sessionId ? "Ask a follow-up…" : "Ask about your textbooks…"}
-              value={input}
+              placeholder={
+                voice.listening
+                  ? "Listening…"
+                  : agentMode
+                    ? "Try: quiz me on my weakest topic"
+                    : sessionId
+                      ? "Ask a follow-up…"
+                      : "Ask about your textbooks…"
+              }
+              value={voice.listening ? voice.interim : input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && send()}
+              readOnly={voice.listening}
             />
-            <Button onClick={send} disabled={loading} size="icon">
+            {voice.supported && (
+              <Button
+                variant={voice.listening ? "default" : "outline"}
+                size="icon"
+                onClick={voice.listening ? voice.stop : voice.start}
+                disabled={loading}
+                aria-label={voice.listening ? "Stop listening" : "Ask by voice"}
+                title={voice.error ?? (voice.listening ? "Stop listening" : "Ask by voice")}
+              >
+                {voice.listening ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+              </Button>
+            )}
+            <Button
+              variant={agentMode ? "default" : "outline"}
+              size="icon"
+              onClick={toggleAgent}
+              disabled={loading}
+              aria-label={agentMode ? "Turn agent mode off" : "Turn agent mode on"}
+              title={
+                agentMode
+                  ? "Agent mode: the tutor can make flashcards and quizzes, and read your mastery and plan"
+                  : agentSupported === false
+                    ? "Agent mode (your current model cannot use tools; it will answer normally)"
+                    : "Agent mode: let the tutor make flashcards and quizzes for you"
+              }
+            >
+              <Wand2 className="h-4 w-4" />
+            </Button>
+            {ttsAvailable && (
+              <Button
+                variant={readAloud ? "default" : "outline"}
+                size="icon"
+                onClick={() => {
+                  if (readAloud) stopSpeaking();
+                  setReadAloud(!readAloud);
+                }}
+                aria-label={readAloud ? "Stop reading answers aloud" : "Read answers aloud"}
+                title={readAloud ? "Reading answers aloud" : "Read answers aloud"}
+              >
+                {readAloud ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+              </Button>
+            )}
+            <Button onClick={() => send()} disabled={loading} size="icon" aria-label="Send">
               <Send className="h-4 w-4" />
             </Button>
           </div>

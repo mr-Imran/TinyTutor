@@ -1,7 +1,7 @@
 "use client";
 
-import { HumanText } from "@/components/HumanText";
+import { Markdown } from "@/components/Markdown";
 
 export function ExplanationView({ text }: { text: string }) {
-  return <HumanText text={text} className="text-muted-foreground" />;
+  return <Markdown text={text} className="text-muted-foreground" />;
 }
